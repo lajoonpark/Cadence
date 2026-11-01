@@ -5,7 +5,7 @@ import CadenceCore
 /// through to the record underneath.
 final class RingOverlayView: NSView {
 
-    var layout = RecordLayout() { didSet { needsDisplay = true } }
+    var ringLayout = RecordLayout() { didSet { needsDisplay = true } }
     var titles: [String] = [] { didSet { needsDisplay = true } }
     var hovered: RecordLayout.Hit = .none { didSet { needsDisplay = true } }
 
@@ -13,17 +13,17 @@ final class RingOverlayView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard layout.sectorCount > 0 else { return }
-        let scale = CGFloat(VinylView.pointsPerUnit(width: bounds.width, layout: layout))
+        guard ringLayout.sectorCount > 0 else { return }
+        let scale = CGFloat(VinylView.pointsPerUnit(width: bounds.width, layout: ringLayout))
         let center = NSPoint(x: bounds.midX, y: bounds.midY)
-        let inner = CGFloat(layout.innerRadius) * scale
-        let outer = CGFloat(layout.outerRadius) * scale
-        let half = CGFloat(layout.step) / 2
+        let inner = CGFloat(ringLayout.innerRadius) * scale
+        let outer = CGFloat(ringLayout.outerRadius) * scale
+        let half = CGFloat(ringLayout.step) / 2
 
-        for index in 0..<layout.sectorCount {
+        for index in 0..<ringLayout.sectorCount {
             // Layout angles run clockwise from 12 o'clock; this view is flipped (y down), so
             // an angle `a` maps to the point (sin a, -cos a).
-            let mid = CGFloat(layout.centerAngle(of: index))
+            let mid = CGFloat(ringLayout.centerAngle(of: index))
             let isHovered = hovered == .sector(index)
 
             let path = NSBezierPath()

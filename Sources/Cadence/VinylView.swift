@@ -10,7 +10,7 @@ final class VinylView: SCNView {
 
     static let side: CGFloat = 420
 
-    var layout = RecordLayout() {
+    var ringLayout = RecordLayout() {
         didSet { hovered = .none; onHover?(.none) }
     }
     /// Index into the pinned items.
@@ -20,7 +20,8 @@ final class VinylView: SCNView {
     var onSkip: ((Int) -> Void)?
     var onDismiss: (() -> Void)?
 
-    var isPlaying = false { didSet { updateSpin() } }
+    /// Not `isPlaying`: SCNView already has a member of that name.
+    var isSpinning = false { didSet { updateSpin() } }
 
     /// Spins about the disc's own axis.
     private let record = SCNNode()
@@ -58,7 +59,7 @@ final class VinylView: SCNView {
         vinyl.roughness.contents = 0.35
         disc.materials = [vinyl]
 
-        let label = SCNCylinder(radius: CGFloat(layout.labelRadius / layout.outerRadius), height: 0.045)
+        let label = SCNCylinder(radius: CGFloat(ringLayout.labelRadius / ringLayout.outerRadius), height: 0.045)
         let labelMaterial = SCNMaterial()
         labelMaterial.diffuse.contents = NSColor.systemRed
         label.materials = [labelMaterial]
@@ -100,7 +101,7 @@ final class VinylView: SCNView {
 
     private func updateSpin() {
         let key = "spin"
-        if isPlaying {
+        if isSpinning {
             guard record.action(forKey: key) == nil else { return }
             let turn = SCNAction.rotateBy(x: 0, y: 2 * .pi, z: 0, duration: 1.8)
             record.runAction(.repeatForever(turn), forKey: key)
@@ -120,7 +121,7 @@ final class VinylView: SCNView {
     /// Mouse position relative to the record centre, y pointing down, in layout units.
     private func layoutPoint(for event: NSEvent) -> (x: Double, y: Double) {
         let p = convert(event.locationInWindow, from: nil)
-        let scale = 1 / VinylView.pointsPerUnit(width: bounds.width, layout: layout)
+        let scale = 1 / VinylView.pointsPerUnit(width: bounds.width, layout: ringLayout)
         return (
             x: Double(p.x - bounds.midX) * scale,
             y: Double(bounds.midY - p.y) * scale
@@ -129,21 +130,21 @@ final class VinylView: SCNView {
 
     override func mouseMoved(with event: NSEvent) {
         let point = layoutPoint(for: event)
-        let hit = layout.hitTest(x: point.x, y: point.y)
+        let hit = ringLayout.hitTest(x: point.x, y: point.y)
         if hit != hovered {
             hovered = hit
             onHover?(hit)
         }
         // Lean toward the cursor, like the compass needle.
         let lean = 0.25
-        let nx = max(-1, min(1, point.x / layout.outerRadius))
-        let ny = max(-1, min(1, point.y / layout.outerRadius))
+        let nx = max(-1, min(1, point.x / ringLayout.outerRadius))
+        let ny = max(-1, min(1, point.y / ringLayout.outerRadius))
         tilt.eulerAngles = SCNVector3(CGFloat(ny * lean), CGFloat(nx * lean), 0)
     }
 
     override func mouseDown(with event: NSEvent) {
         let point = layoutPoint(for: event)
-        switch layout.hitTest(x: point.x, y: point.y) {
+        switch ringLayout.hitTest(x: point.x, y: point.y) {
         case .label: onLabelClick?()
         case .sector(let i): onSelect?(i)
         case .none: onDismiss?()
@@ -162,7 +163,7 @@ final class VinylView: SCNView {
         case 124: onSkip?(1)                        // →
         default:
             if let chars = event.charactersIgnoringModifiers, let digit = Int(chars),
-               digit >= 1, digit <= layout.sectorCount {
+               digit >= 1, digit <= ringLayout.sectorCount {
                 onSelect?(digit - 1)
             }
         }

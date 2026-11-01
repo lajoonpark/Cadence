@@ -52,9 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func reloadPins() {
         pins = PinnedStore.load(from: pinsURL)
-        let layout = RecordLayout(sectorCount: pins.count)
-        vinyl.layout = layout
-        ring.layout = layout
+        let ringLayout = RecordLayout(sectorCount: pins.count)
+        vinyl.ringLayout = ringLayout
+        ring.ringLayout = ringLayout
         ring.titles = pins.map(\.title)
     }
 
@@ -136,6 +136,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshPlayingAsync() async {
         let now = await backend.nowPlaying()
-        await MainActor.run { vinyl.isPlaying = now.isPlaying }
+        await MainActor.run { vinyl.isSpinning = now.isPlaying }
     }
 }

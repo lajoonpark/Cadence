@@ -66,6 +66,10 @@ final class SuitcaseScene {
     /// Leans the case: `pitch` tips the front down, `roll` tips the right side down (both radians).
     func setTilt(pitch: Double, roll: Double) {
         tiltNode.eulerAngles = SCNVector3(CGFloat(pitch), 0, CGFloat(-roll))
+        // Tipping about the middle sinks the low edge below the floor, so lift the case by
+        // exactly that much: it leans on its corner instead of dropping through the ground.
+        let dip = L.caseDepth / 2 * abs(sin(pitch)) + L.caseWidth / 2 * abs(sin(roll))
+        tiltNode.position = SCNVector3(0, CGFloat(0.6 + dip), 0)
     }
 
     /// A point in view-ray space (as `unprojectPoint` returns) in the case's own frame, so the
@@ -230,10 +234,14 @@ final class SuitcaseScene {
         // Shadow catcher: invisible except where the case shades it.
         let floorMaterial = SCNMaterial()
         floorMaterial.lightingModel = .shadowOnly
+        // Never hide the case: it only receives the shadow.
+        floorMaterial.writesToDepthBuffer = false
+        floorMaterial.readsFromDepthBuffer = false
         let plane = SCNPlane(width: 18, height: 18)
         plane.materials = [floorMaterial]
         floorNode.geometry = plane
         floorNode.name = "floor"
+        floorNode.renderingOrder = -1
         floorNode.eulerAngles.x = -.pi / 2
         floorNode.position = SCNVector3(0, -0.002, 0)
         scene.rootNode.addChildNode(floorNode)

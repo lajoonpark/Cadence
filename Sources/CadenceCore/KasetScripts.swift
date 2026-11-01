@@ -8,13 +8,22 @@ public enum KasetScripts {
         "tell application \"Kaset\" to \(verb)"
     }
 
-    public static func script(for command: PlayerCommand) -> String {
+    /// The script for a command, or nil if Kaset cannot do it (it has no seek).
+    public static func script(for command: PlayerCommand) -> String? {
         switch command {
         case .togglePlayPause: tell("playpause")
         case .next: tell("next track")
         case .previous: tell("previous track")
         case .like: tell("like track")
+        case .setVolume(let volume): tell("set volume \(percent(volume))")
+        case .seek: nil
         }
+    }
+
+    /// 0...1 as Kaset's whole-number 0...100.
+    static func percent(_ volume: Double) -> Int {
+        guard volume.isFinite else { return 0 }
+        return Int((min(max(volume, 0), 1) * 100).rounded())
     }
 
     /// Plays video IDs in order. Returns nil if any ID is not a plain YouTube ID (they are

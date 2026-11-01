@@ -27,6 +27,41 @@ final class KasetTests: XCTestCase {
         XCTAssertEqual(KasetScripts.script(for: .like), #"tell application "Kaset" to like track"#)
     }
 
+    func testVolumeAndSeekScripts() {
+        XCTAssertEqual(KasetScripts.script(for: .setVolume(0.5)), #"tell application "Kaset" to set volume 50"#)
+        XCTAssertEqual(KasetScripts.script(for: .setVolume(0.333)), #"tell application "Kaset" to set volume 33"#)
+        XCTAssertEqual(KasetScripts.script(for: .setVolume(7)), #"tell application "Kaset" to set volume 100"#)
+        XCTAssertEqual(KasetScripts.script(for: .setVolume(-1)), #"tell application "Kaset" to set volume 0"#)
+        XCTAssertEqual(KasetScripts.script(for: .setVolume(.nan)), #"tell application "Kaset" to set volume 0"#)
+        XCTAssertNil(KasetScripts.script(for: .seek(to: 30)), "Kaset has no seek command")
+    }
+
+    func testSeekIsNotSentToKaset() async {
+        let runner = FakeRunner()
+        let backend = KasetBackend(runner: runner)
+        XCTAssertFalse(backend.canSeek)
+        await backend.send(.seek(to: 30))
+        XCTAssertTrue(runner.scripts.isEmpty)
+        await backend.send(.setVolume(0.2))
+        XCTAssertEqual(runner.scripts, [#"tell application "Kaset" to set volume 20"#])
+    }
+
+    func testVolumeAndLikeParsing() {
+        let json = #"""
+        {"isPlaying":true,"position":10,"duration":100,"volume":75,"likeStatus":"liked",
+         "currentTrack":{"name":"S","artist":"A"}}
+        """#
+        let now = KasetPlayerInfo.nowPlaying(fromJSON: json)
+        XCTAssertEqual(now.volume ?? -1, 0.75, accuracy: 1e-9)
+        XCTAssertTrue(now.isLiked)
+        XCTAssertEqual(now.position, 10)
+        XCTAssertEqual(now.duration, 100)
+
+        let plain = KasetPlayerInfo.nowPlaying(fromJSON: #"{"currentTrack":{"name":"S"}}"#)
+        XCTAssertNil(plain.volume)
+        XCTAssertFalse(plain.isLiked)
+    }
+
     func testPlayScripts() {
         XCTAssertEqual(KasetScripts.play(videoIds: ["abc"]), #"tell application "Kaset" to play video "abc""#)
         XCTAssertEqual(

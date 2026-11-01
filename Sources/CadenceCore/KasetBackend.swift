@@ -11,14 +11,18 @@ public final class KasetBackend: MusicBackend {
         self.runner = runner
     }
 
+    /// Kaset's AppleScript has no seek command, so the record cannot scrub through it.
+    public var canSeek: Bool { false }
+
     public func nowPlaying() async -> NowPlaying {
         guard let text = try? await runner.osascript(KasetScripts.playerInfo) else { return .idle }
         return KasetPlayerInfo.nowPlaying(fromJSON: text)
     }
 
     public func send(_ command: PlayerCommand) async {
+        guard let script = KasetScripts.script(for: command) else { return }
         do {
-            _ = try await runner.osascript(KasetScripts.script(for: command))
+            _ = try await runner.osascript(script)
         } catch {
             NSLog("Cadence: Kaset command \(command) failed: \(error)")
         }

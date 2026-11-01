@@ -21,6 +21,7 @@ final class CadencePanel: NSPanel {
         hasShadow = false
         hidesOnDeactivate = false
         isMovable = false
+        acceptsMouseMovedEvents = true
         isReleasedWhenClosed = false
         animationBehavior = .none
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle, .stationary]

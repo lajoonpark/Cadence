@@ -226,3 +226,70 @@ final class SuitcaseControlTests: XCTestCase {
         XCTAssertFalse(SuitcaseControl.record.isButton)
     }
 }
+
+final class SuitcaseLayoutTests: XCTestCase {
+
+    func testTheStylusLandsOnTheGroovesItIsAskedFor() throws {
+        for radius in [Tonearm.outerRadius, 0.8, Tonearm.innerRadius] {
+            let s = try XCTUnwrap(Tonearm.stylus(atRadius: radius))
+            XCTAssertEqual(s.distance(to: SuitcaseLayout.record), radius, accuracy: 1e-9)
+            XCTAssertEqual(s.distance(to: Tonearm.pivot), Tonearm.length, accuracy: 1e-9)
+        }
+    }
+
+    func testTheArmMovesInwardAsTheSongPlays() {
+        var last = Tonearm.angle(forProgress: 0)
+        for p in stride(from: 0.1, through: 1.0, by: 0.1) {
+            let a = Tonearm.angle(forProgress: p)
+            XCTAssertNotEqual(a, last)
+            last = a
+        }
+        XCTAssertEqual(Tonearm.angle(forProgress: -3), Tonearm.angle(forProgress: 0))
+        XCTAssertEqual(Tonearm.angle(forProgress: 9), Tonearm.angle(forProgress: 1))
+    }
+
+    func testTheStylusStaysOnTheRecordAndBehindTheButtons() throws {
+        for p in stride(from: 0.0, through: 1.0, by: 0.25) {
+            let r = Tonearm.outerRadius + (Tonearm.innerRadius - Tonearm.outerRadius) * p
+            let s = try XCTUnwrap(Tonearm.stylus(atRadius: r))
+            XCTAssertLessThan(s.z, SuitcaseLayout.record.z + 0.01, "stylus should be on the back half")
+            XCTAssertGreaterThan(r, SuitcaseLayout.labelRadius, "stylus must stay outside the artwork")
+            XCTAssertLessThan(r, SuitcaseLayout.recordRadius)
+        }
+    }
+
+    func testTheArmAngleMatchesTheStylusDirection() throws {
+        let radius = 0.8
+        let s = try XCTUnwrap(Tonearm.stylus(atRadius: radius))
+        let theta = try XCTUnwrap(Tonearm.angle(atRadius: radius))
+        // Local -x rotated about y by theta: (-cos, sin) in (x, z).
+        XCTAssertEqual(-cos(theta) * Tonearm.length, s.x - Tonearm.pivot.x, accuracy: 1e-9)
+        XCTAssertEqual(sin(theta) * Tonearm.length, s.z - Tonearm.pivot.z, accuracy: 1e-9)
+    }
+
+    func testNothingOnTheDeckOverlapsOrFallsOffIt() {
+        var circles: [(String, DeckPoint, Double)] = [
+            ("record", SuitcaseLayout.record, SuitcaseLayout.platterRadius),
+            ("knob", SuitcaseLayout.knob, SuitcaseLayout.knobRadius + 0.14), // with its tick marks
+            ("pivot", Tonearm.pivot, 0.18),
+        ]
+        for c in SuitcaseControl.allCases {
+            if let b = SuitcaseLayout.button(c) { circles.append((c.rawValue, b.center, b.radius)) }
+        }
+        for (name, p, r) in circles {
+            XCTAssertLessThanOrEqual(abs(p.x) + r, SuitcaseLayout.deckHalfWidth, "\(name) off the deck")
+            XCTAssertLessThanOrEqual(abs(p.z) + r, SuitcaseLayout.deckHalfDepth, "\(name) off the deck")
+        }
+        for i in circles.indices {
+            for j in circles.indices where j > i {
+                let gap = circles[i].1.distance(to: circles[j].1) - circles[i].2 - circles[j].2
+                XCTAssertGreaterThan(gap, 0.02, "\(circles[i].0) overlaps \(circles[j].0)")
+            }
+        }
+    }
+
+    func testTheRecordBigEnoughForItsLabel() {
+        XCTAssertLessThan(SuitcaseLayout.labelRadius, SuitcaseLayout.recordRadius)
+        XCTAssertLessThan(SuitcaseLayout.recordRadius, SuitcaseLayout.platterRadius)
+    }
+}

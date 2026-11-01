@@ -3,16 +3,6 @@ import XCTest
 
 final class ModelTests: XCTestCase {
 
-    func testQuickTargetDigits() {
-        XCTAssertEqual(QuickTarget(digit: 1), .liked)
-        XCTAssertEqual(QuickTarget(digit: 5), .search)
-        XCTAssertNil(QuickTarget(digit: 0))
-        XCTAssertNil(QuickTarget(digit: 6))
-        for target in QuickTarget.allCases {
-            XCTAssertEqual(QuickTarget(digit: target.shortcutDigit), target)
-        }
-    }
-
     func testDefaultHotkey() {
         XCTAssertTrue(HotkeySpec.default.isValid)
         XCTAssertEqual(HotkeySpec.default.displayName, "⌃⌥Space")

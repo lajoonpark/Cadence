@@ -65,6 +65,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSUIElement</key><true/>
+    <key>NSAppleEventsUsageDescription</key><string>Cadence controls Kaset (play, pause, skip, like, now playing) through AppleScript.</string>
 </dict>
 </plist>
 PLIST

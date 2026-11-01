@@ -22,7 +22,7 @@ public struct RecordLayout: Equatable, Sendable {
     public let innerRadius: Double
     public let outerRadius: Double
 
-    public init(sectorCount: Int = QuickTarget.allCases.count, labelRadius: Double = 70, outerRadius: Double = 200) {
+    public init(sectorCount: Int = 0, labelRadius: Double = 70, outerRadius: Double = 200) {
         self.sectorCount = max(0, sectorCount)
         self.labelRadius = labelRadius
         self.innerRadius = labelRadius + max(2, outerRadius * 0.085)

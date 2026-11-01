@@ -1,35 +1,52 @@
 # Cadence
 
-A lightweight macOS menu-bar app for YouTube Music. Press a shortcut and a 3D vinyl record
-appears **at your cursor**: point and click, or press a number. Same idea as
-[Lodestar](https://github.com/lajoonpark) (the bookmarks compass), for music.
+A lightweight macOS menu-bar app that sits in front of [Kaset](https://github.com/sozercan/kaset)
+(a native YouTube Music client). Press a shortcut and a 3D vinyl record appears **at your
+cursor**: point and click, or press a number.
 
 - **⌃⌥Space** (default, will be configurable) opens the record at the cursor, anywhere.
 - **Label** in the middle: play / pause (also `Space`).
-- **Outer ring**: quick targets: `1` Liked, `2` Mixes, `3` Recent, `4` Playlists, `5` Search.
+- **Outer ring**: your pinned items, `1`–`9` to pick one.
 - **Scroll** or **← / →**: previous / next track.
 - **Esc**, clicking outside, or the shortcut again closes it.
 - Menu bar only: no Dock icon.
 
-## Status: scaffold
+Cadence is a **companion**: Kaset stays the player and Cadence is the quick remote.
 
-What exists:
+## How it talks to Kaset
+
+| Need | Mechanism |
+| --- | --- |
+| Play, pause, next, previous, like, now playing | Kaset's AppleScript (`playpause`, `next track`, `like track`, `get player info`) |
+| Start a song or a list of songs | AppleScript `play video` / `play videos` with YouTube Music video IDs |
+| Open a playlist or album | A shortcut from the Shortcuts app, run with `shortcuts run` (Kaset documents Play Playlist / Play Album actions) |
+
+Kaset cannot list your library, so the ring shows **pinned items** you choose instead of live
+lists. Menu bar › **Edit Pinned Items…** reveals `~/Library/Application Support/Cadence/pins.json`:
+
+```json
+[
+  { "title": "Focus",  "shortcut": "Cadence Focus" },
+  { "title": "Anthem", "videoIds": ["dQw4w9WgXcQ"] }
+]
+```
+
+Each item has either `videoIds` (one or more) or `shortcut`; up to 9; malformed items are
+skipped. The file is re-read each time the record opens.
+
+macOS asks once for permission to control Kaset (Automation).
+
+## Status
 
 | Piece | State |
 | --- | --- |
-| `CadenceCore`: hotkey spec, ring geometry and hit testing, `QuickTarget`, `NowPlaying`, `MusicBackend` protocol | done, unit tested (`swift test`, runs on Linux too) |
-| `Cadence` app: menu-bar item, global hotkey, floating panel at the cursor, SceneKit record that spins and leans | written, **not yet compiled or run** (needs macOS) |
-| `MusicBackend` implementation for YouTube Music | **not started**: only `NullBackend` |
-| Settings, onboarding, icon, real record art | not started |
+| `CadenceCore`: hotkey spec, ring geometry, pinned items, Kaset AppleScript + now-playing parsing, `KasetBackend` | done, unit tested (`swift test`, runs on Linux too) |
+| `Cadence` app: menu-bar item, global hotkey, floating panel, SceneKit record, ring overlay | written, **not yet compiled or run** (needs macOS) |
+| Verified against a real Kaset | **not yet**: the AppleScript verbs come from Kaset's docs |
+| Settings UI, onboarding, icon, real record art, hotkey picker | not started |
 
-## The open decision: how does it play YouTube Music?
-
-The UI only talks to `MusicBackend`, so this can be decided later:
-
-1. **Embedded web view** of music.youtube.com inside Cadence, controlled with injected
-   JavaScript (what Kaset does). Self-contained; needs a sign-in flow.
-2. **Drive an existing player** (Kaset or a browser tab) with media keys / AppleScript.
-   Small, but depends on that player and gives limited now-playing info.
+Known open question: on the author's Mac the Kaset actions did not appear in the Shortcuts
+app, so shortcut-based pins are untested. Song pins (`videoIds`) do not need Shortcuts.
 
 ## Build
 

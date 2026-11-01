@@ -10,8 +10,12 @@ final class VinylView: SCNView {
 
     static let side: CGFloat = 420
 
-    var layout = RecordLayout()
-    var onSelect: ((QuickTarget) -> Void)?
+    var layout = RecordLayout() {
+        didSet { hovered = .none; onHover?(.none) }
+    }
+    /// Index into the pinned items.
+    var onSelect: ((Int) -> Void)?
+    var onHover: ((RecordLayout.Hit) -> Void)?
     var onLabelClick: (() -> Void)?
     var onSkip: ((Int) -> Void)?
     var onDismiss: (() -> Void)?
@@ -107,10 +111,16 @@ final class VinylView: SCNView {
 
     // MARK: Input
 
+    /// Screen points per layout unit. The ring's outer edge sits at 80% of the half-width,
+    /// leaving room for the tilt. `RingOverlayView` draws with the same mapping.
+    static func pointsPerUnit(width: CGFloat, layout: RecordLayout) -> Double {
+        Double(width / 2 * 0.8) / layout.outerRadius
+    }
+
     /// Mouse position relative to the record centre, y pointing down, in layout units.
     private func layoutPoint(for event: NSEvent) -> (x: Double, y: Double) {
         let p = convert(event.locationInWindow, from: nil)
-        let scale = Double(layout.outerRadius) / Double(bounds.width / 2 * 0.8)
+        let scale = 1 / VinylView.pointsPerUnit(width: bounds.width, layout: layout)
         return (
             x: Double(p.x - bounds.midX) * scale,
             y: Double(bounds.midY - p.y) * scale
@@ -119,7 +129,11 @@ final class VinylView: SCNView {
 
     override func mouseMoved(with event: NSEvent) {
         let point = layoutPoint(for: event)
-        hovered = layout.hitTest(x: point.x, y: point.y)
+        let hit = layout.hitTest(x: point.x, y: point.y)
+        if hit != hovered {
+            hovered = hit
+            onHover?(hit)
+        }
         // Lean toward the cursor, like the compass needle.
         let lean = 0.25
         let nx = max(-1, min(1, point.x / layout.outerRadius))
@@ -131,7 +145,7 @@ final class VinylView: SCNView {
         let point = layoutPoint(for: event)
         switch layout.hitTest(x: point.x, y: point.y) {
         case .label: onLabelClick?()
-        case .sector(let i): if let target = QuickTarget(rawValue: i) { onSelect?(target) }
+        case .sector(let i): onSelect?(i)
         case .none: onDismiss?()
         }
     }
@@ -148,8 +162,8 @@ final class VinylView: SCNView {
         case 124: onSkip?(1)                        // →
         default:
             if let chars = event.charactersIgnoringModifiers, let digit = Int(chars),
-               let target = QuickTarget(digit: digit) {
-                onSelect?(target)
+               digit >= 1, digit <= layout.sectorCount {
+                onSelect?(digit - 1)
             }
         }
     }

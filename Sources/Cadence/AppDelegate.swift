@@ -5,31 +5,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let hotkey = GlobalHotkey()
     private let panel = CadencePanel()
+    private let container = NSView(frame: NSRect(x: 0, y: 0, width: VinylView.side, height: VinylView.side))
     private let vinyl = VinylView(frame: NSRect(x: 0, y: 0, width: VinylView.side, height: VinylView.side))
+    private let ring = RingOverlayView(frame: NSRect(x: 0, y: 0, width: VinylView.side, height: VinylView.side))
     private var statusItem: NSStatusItem?
     private var outsideClickMonitor: Any?
+    private var pins: [PinnedItem] = []
 
-    /// Swap for a real YouTube Music backend once one exists.
-    private let backend: MusicBackend = NullBackend()
+    private let backend: MusicBackend = KasetBackend()
+
+    /// ~/Library/Application Support/Cadence/pins.json
+    private var pinsURL: URL {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Cadence", isDirectory: true)
+            .appendingPathComponent("pins.json")
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        panel.contentView = vinyl
+        container.addSubview(vinyl)
+        container.addSubview(ring) // on top; click-through
+        panel.contentView = container
         panel.setContentSize(NSSize(width: VinylView.side, height: VinylView.side))
 
         vinyl.onDismiss = { [weak self] in self?.hide() }
         vinyl.onLabelClick = { [weak self] in self?.send(.togglePlayPause) }
         vinyl.onSkip = { [weak self] step in self?.send(step > 0 ? .next : .previous) }
-        vinyl.onSelect = { [weak self] target in
-            Task { await self?.backend.open(target) }
-            self?.hide()
+        vinyl.onHover = { [weak self] hit in self?.ring.hovered = hit }
+        vinyl.onSelect = { [weak self] index in
+            guard let self, pins.indices.contains(index) else { return }
+            let item = pins[index]
+            Task { await self.backend.open(item) }
+            hide()
         }
 
         setUpStatusItem()
+        reloadPins()
 
         let spec = HotkeySpec.default
         if !hotkey.register(spec, action: { [weak self] in self?.toggle() }) {
             NSLog("Cadence: \(spec.displayName) is already taken by another app")
         }
+    }
+
+    // MARK: Pins
+
+    private func reloadPins() {
+        pins = PinnedStore.load(from: pinsURL)
+        let layout = RecordLayout(sectorCount: pins.count)
+        vinyl.layout = layout
+        ring.layout = layout
+        ring.titles = pins.map(\.title)
+    }
+
+    @objc private func editPins() {
+        let url = pinsURL
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let example = [
+                PinnedItem(title: "Example song", videoIds: ["dQw4w9WgXcQ"]),
+                PinnedItem(title: "Example shortcut", shortcut: "Name of a shortcut"),
+            ]
+            if let data = try? PinnedStore.encode(example) { try? data.write(to: url) }
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     // MARK: Menu bar
@@ -38,10 +77,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "opticaldisc", accessibilityDescription: "Cadence")
         let menu = NSMenu()
-        menu.addItem(withTitle: "Show Record (\(HotkeySpec.default.displayName))", action: #selector(show), keyEquivalent: "")
+        let show = menu.addItem(withTitle: "Show Record (\(HotkeySpec.default.displayName))", action: #selector(show), keyEquivalent: "")
+        let edit = menu.addItem(withTitle: "Edit Pinned Items…", action: #selector(editPins), keyEquivalent: "")
+        show.target = self
+        edit.target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Cadence", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.items.first?.target = self
         item.menu = menu
         statusItem = item
     }
@@ -49,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Showing and hiding
 
     @objc private func show() {
+        reloadPins() // pick up edits to pins.json without restarting
         let mouse = NSEvent.mouseLocation
         let side = VinylView.side
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
@@ -60,12 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setFrame(NSRect(origin: origin, size: NSSize(width: side, height: side)), display: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(vinyl)
-
-        Task { [weak self] in
-            guard let self else { return }
-            let now = await backend.nowPlaying()
-            await MainActor.run { self.vinyl.isPlaying = now.isPlaying }
-        }
+        refreshPlaying()
 
         // A click anywhere outside the record dismisses it.
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
@@ -89,8 +126,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { [weak self] in
             guard let self else { return }
             await backend.send(command)
-            let now = await backend.nowPlaying()
-            await MainActor.run { self.vinyl.isPlaying = now.isPlaying }
+            await refreshPlayingAsync()
         }
+    }
+
+    private func refreshPlaying() {
+        Task { [weak self] in await self?.refreshPlayingAsync() }
+    }
+
+    private func refreshPlayingAsync() async {
+        let now = await backend.nowPlaying()
+        await MainActor.run { vinyl.isPlaying = now.isPlaying }
     }
 }

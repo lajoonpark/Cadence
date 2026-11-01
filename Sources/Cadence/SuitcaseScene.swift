@@ -18,7 +18,7 @@ final class SuitcaseScene {
     let caseRoot = SCNNode()
     /// Leans the whole case toward the cursor, about its middle.
     private let tiltNode = SCNNode()
-    /// Catches the shadow. Faded with the case so the shadow does not outlast it.
+    /// Catches the shadow.
     let floorNode = SCNNode()
 
     private let lidPivot = SCNNode()
@@ -249,8 +249,8 @@ final class SuitcaseScene {
         // A three-quarter view from the front, a little above, like the reference photo.
         let camera = SCNCamera()
         camera.fieldOfView = 28
-        camera.zNear = 1
-        camera.zFar = 60
+        camera.zNear = 6
+        camera.zFar = 40
         cameraNode.camera = camera
         let distance = 15.0, elevation = 0.56, yaw = -0.24
         cameraNode.position = SCNVector3(
@@ -361,10 +361,10 @@ final class SuitcaseScene {
         grooveMaterial.lightingModel = .constant
         grooveMaterial.diffuse.contents = SuitcaseTextures.grooves(labelFraction: CGFloat(labelFraction))
         let grooves = flatPlane(2 * L.recordRadius, 2 * L.recordRadius, grooveMaterial)
-        recordSpin.addChildNode(at(grooves, 0, 0.0105, 0))
+        recordSpin.addChildNode(at(grooves, 0, 0.012, 0))
 
         let label = flatPlane(2 * L.labelRadius, 2 * L.labelRadius, labelMaterial)
-        recordSpin.addChildNode(at(label, 0, 0.0115, 0))
+        recordSpin.addChildNode(at(label, 0, 0.0145, 0))
 
         recordSpin.addChildNode(at(cylinder(0.028, 0.045, steel), 0, 0.02, 0))
 
@@ -375,7 +375,7 @@ final class SuitcaseScene {
         sheenMaterial.writesToDepthBuffer = false
         sheenMaterial.diffuse.contents = SuitcaseTextures.sheen(labelFraction: CGFloat(labelFraction))
         let sheen = flatPlane(2 * L.recordRadius, 2 * L.recordRadius, sheenMaterial)
-        caseRoot.addChildNode(at(sheen, rc.x, L.recordTop + 0.014, rc.z))
+        caseRoot.addChildNode(at(sheen, rc.x, L.recordTop + 0.018, rc.z))
     }
 
     private func buildTonearm() {

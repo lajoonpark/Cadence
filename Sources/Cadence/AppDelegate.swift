@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 origin.x = min(max(origin.x, frame.minX), frame.maxX - size.width)
                 origin.y = min(max(origin.y, frame.minY), frame.maxY - size.height)
             }
+            panel.alphaValue = 0 // the suitcase fades it in once its first frame is ready
             panel.setFrame(NSRect(origin: origin, size: size), display: true)
             panel.makeKeyAndOrderFront(nil)
         }

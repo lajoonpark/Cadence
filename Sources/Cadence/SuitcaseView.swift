@@ -104,8 +104,6 @@ final class SuitcaseView: SCNView {
         suitcase.setLiked(false)
         suitcase.setLid(angle: 0)
         suitcase.setTonearm(angle: armAngle)
-        suitcase.caseRoot.opacity = 0
-        suitcase.floorNode.opacity = 0
 
         addTrackingArea(NSTrackingArea(
             rect: .zero,
@@ -133,6 +131,10 @@ final class SuitcaseView: SCNView {
             thump = 0
             spinSpeed = 0
             tilt = (0, 0)
+            // Start invisible and already at the arrival pose, so the first frame the window
+            // shows is not left over from the last time it was open.
+            window?.alphaValue = 0
+            applyArrival()
             armAngle = hasTrack ? Tonearm.angle(forProgress: displayedProgress()) : Tonearm.parkedAngle
             lastTimestamp = nil
         }
@@ -238,12 +240,7 @@ final class SuitcaseView: SCNView {
         case .hidden:
             break
         }
-        let ease = 1 - pow(1 - appear, 3)
-        suitcase.caseRoot.opacity = CGFloat(min(1, appear * 1.6))
-        suitcase.floorNode.opacity = CGFloat(appear)
-        suitcase.caseRoot.position.y = CGFloat(-thump - (1 - ease) * 0.45)
-        let scale = CGFloat(0.94 + 0.06 * ease)
-        suitcase.caseRoot.scale = SCNVector3(scale, scale, scale)
+        applyArrival()
 
         // Lean toward the cursor.
         let follow = min(1, dt * 9)
@@ -267,6 +264,19 @@ final class SuitcaseView: SCNView {
             stopDisplayLink()
             onClosed?()
         }
+    }
+
+    /// Arrival and departure: the case rises and grows into place while the window fades.
+    ///
+    /// The fade is the window's, not the scene's. Fading the 3D nodes makes SceneKit blend every
+    /// part of the case separately and sort them badly, so the lid, lining and deck flicker
+    /// through one another; fading the finished picture cannot.
+    private func applyArrival() {
+        let ease = 1 - pow(1 - appear, 3)
+        window?.alphaValue = CGFloat(min(1, appear * 1.8))
+        suitcase.caseRoot.position.y = CGFloat(-thump - (1 - ease) * 0.45)
+        let scale = CGFloat(0.94 + 0.06 * ease)
+        suitcase.caseRoot.scale = SCNVector3(scale, scale, scale)
     }
 
     // MARK: Picking

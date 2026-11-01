@@ -113,10 +113,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { [weak self] in
             guard let self else { return }
             await backend.send(command)
-            if command == .next || command == .previous {
-                // Kaset needs a moment to change track before it reports the new one.
-                try? await Task.sleep(nanoseconds: 400_000_000)
-            }
+            // Kaset takes a moment to report a change, so ask again shortly after.
+            await refreshNow()
+            try? await Task.sleep(nanoseconds: 500_000_000)
             await refreshNow()
         }
     }

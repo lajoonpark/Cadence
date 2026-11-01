@@ -57,6 +57,16 @@ final class SuitcaseView: SCNView {
     private var armAngle = Tonearm.parkedAngle
 
     private var lastVolumeChange: CFTimeInterval = 0
+    /// After a press the display shows the new state at once; the player takes a moment to
+    /// agree, and an older reading must not flip it back in the meantime.
+    private var playingHoldUntil: CFTimeInterval = 0
+    private var likedHoldUntil: CFTimeInterval = 0
+
+    /// How far the case leans toward the cursor, as a fraction of `maxPitch` / `maxRoll`.
+    private var tiltTarget = (pitch: 0.0, roll: 0.0)
+    private var tilt = (pitch: 0.0, roll: 0.0)
+    private static let maxPitch = 0.12
+    private static let maxRoll = 0.10
 
     private enum DragState { case none, knob, scrub, button(SuitcaseControl) }
     private var dragState = DragState.none
@@ -122,6 +132,7 @@ final class SuitcaseView: SCNView {
             appear = 0
             thump = 0
             spinSpeed = 0
+            tilt = (0, 0)
             armAngle = hasTrack ? Tonearm.angle(forProgress: displayedProgress()) : Tonearm.parkedAngle
             lastTimestamp = nil
         }
@@ -156,9 +167,10 @@ final class SuitcaseView: SCNView {
     func apply(_ now: NowPlaying) {
         nowPlaying = now
         hasTrack = now.title != NowPlaying.idle.title
-        playing = now.isPlaying
-        liked = now.isLiked
-        positionStamp = CACurrentMediaTime()
+        let t = CACurrentMediaTime()
+        if t >= playingHoldUntil || now.isPlaying == playing { playing = now.isPlaying; playingHoldUntil = 0 }
+        if t >= likedHoldUntil || now.isLiked == liked { liked = now.isLiked; likedHoldUntil = 0 }
+        positionStamp = t
         suitcase.setPlaying(playing)
         suitcase.setLiked(liked)
 
@@ -233,9 +245,15 @@ final class SuitcaseView: SCNView {
         let scale = CGFloat(0.94 + 0.06 * ease)
         suitcase.caseRoot.scale = SCNVector3(scale, scale, scale)
 
+        // Lean toward the cursor.
+        let follow = min(1, dt * 9)
+        tilt.pitch += (tiltTarget.pitch - tilt.pitch) * follow
+        tilt.roll += (tiltTarget.roll - tilt.roll) * follow
+        suitcase.setTilt(pitch: tilt.pitch, roll: tilt.roll)
+
         // Record: spins up and winds down, and follows the pointer while it is being scrubbed.
         let target = playing ? SuitcaseView.spinRate : 0
-        spinSpeed += (target - spinSpeed) * min(1, dt * (playing ? 1.6 : 2.6))
+        spinSpeed += (target - spinSpeed) * min(1, dt * (playing ? 5 : 3.5))
         if scrub == nil { spinAngle += spinSpeed * dt }
         suitcase.setRecord(angle: spinAngle)
 
@@ -267,8 +285,8 @@ final class SuitcaseView: SCNView {
 
     /// Where a view point lands on a horizontal plane at `height`, as a deck position.
     private func deckPoint(for point: NSPoint, height: Double) -> DeckPoint? {
-        let near = unprojectPoint(SCNVector3(point.x, point.y, 0))
-        let far = unprojectPoint(SCNVector3(point.x, point.y, 1))
+        let near = suitcase.caseLocal(unprojectPoint(SCNVector3(point.x, point.y, 0)))
+        let far = suitcase.caseLocal(unprojectPoint(SCNVector3(point.x, point.y, 1)))
         let dy = Double(far.y - near.y)
         guard abs(dy) > 1e-9 else { return nil }
         let t = (height - Double(near.y)) / dy
@@ -282,14 +300,24 @@ final class SuitcaseView: SCNView {
 
     // MARK: Mouse
 
+    /// The case leans toward the pointer: the farther from the middle, the more it tips.
+    private func leanToward(_ point: NSPoint) {
+        guard phase == .open, bounds.width > 0, bounds.height > 0 else { return }
+        let nx = max(-1, min(1, Double((point.x - bounds.midX) / (bounds.width / 2))))
+        let ny = max(-1, min(1, Double((bounds.midY - point.y) / (bounds.height / 2))))
+        tiltTarget = (pitch: ny * SuitcaseView.maxPitch, roll: nx * SuitcaseView.maxRoll)
+    }
+
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        leanToward(point)
         guard isInteractive else { setHover(nil); return }
         let control = hit(at: point).control
         setHover(control)
     }
 
     override func mouseExited(with event: NSEvent) {
+        tiltTarget = (0, 0)
         setHover(nil)
     }
 
@@ -322,35 +350,32 @@ final class SuitcaseView: SCNView {
         case .record:
             if scrubEnabled { beginScrub(at: point) }
         default:
+            // Fires on the press, like a hardware button, not on release: it feels quicker.
             dragState = .button(control)
             suitcase.setPressed(control)
+            press(control)
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        leanToward(point)
         switch dragState {
-        case .none: break
+        case .none, .button: break
         case .knob: turnKnob(to: point)
         case .scrub: continueScrub(at: point)
-        case .button(let control):
-            suitcase.setPressed(hit(at: point).control == control ? control : nil)
         }
     }
 
     override func mouseUp(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
         defer {
             dragState = .none
             suitcase.setPressed(nil)
         }
         switch dragState {
-        case .none: break
+        case .none, .button: break
         case .knob: NSCursor.openHand.set()
         case .scrub: endScrub()
-        case .button(let control):
-            guard hit(at: point).control == control else { return }
-            press(control)
         }
     }
 
@@ -360,9 +385,11 @@ final class SuitcaseView: SCNView {
         switch control {
         case .playPause:
             playing.toggle()
+            playingHoldUntil = CACurrentMediaTime() + 1.5
             suitcase.setPlaying(playing)
         case .like:
             liked.toggle()
+            likedHoldUntil = CACurrentMediaTime() + 1.5
             suitcase.setLiked(liked)
         default: break
         }

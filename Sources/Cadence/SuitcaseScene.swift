@@ -16,6 +16,8 @@ final class SuitcaseScene {
     let cameraNode = SCNNode()
     /// The whole case. The view dips it when the lid lands and lifts it in on arrival.
     let caseRoot = SCNNode()
+    /// Leans the whole case toward the cursor, about its middle.
+    private let tiltNode = SCNNode()
     /// Catches the shadow. Faded with the case so the shadow does not outlast it.
     let floorNode = SCNNode()
 
@@ -48,7 +50,10 @@ final class SuitcaseScene {
         buildTonearm()
         buildKnob()
         buildButtons()
-        scene.rootNode.addChildNode(caseRoot)
+        tiltNode.position = SCNVector3(0, 0.6, 0)
+        tiltNode.pivot = SCNMatrix4MakeTranslation(0, 0.6, 0)
+        tiltNode.addChildNode(caseRoot)
+        scene.rootNode.addChildNode(tiltNode)
     }
 
     // MARK: Setters
@@ -56,6 +61,17 @@ final class SuitcaseScene {
     /// 0 = shut. Positive opens it: the front edge swings up and back over the hinge.
     func setLid(angle: Double) {
         lidPivot.eulerAngles.x = CGFloat(-angle)
+    }
+
+    /// Leans the case: `pitch` tips the front down, `roll` tips the right side down (both radians).
+    func setTilt(pitch: Double, roll: Double) {
+        tiltNode.eulerAngles = SCNVector3(CGFloat(pitch), 0, CGFloat(-roll))
+    }
+
+    /// A point in view-ray space (as `unprojectPoint` returns) in the case's own frame, so the
+    /// controls are found correctly while the case is leaning, dipping or arriving.
+    func caseLocal(_ point: SCNVector3) -> SCNVector3 {
+        caseRoot.convertPosition(point, from: nil)
     }
 
     /// Radians, clockwise as seen from above.
@@ -228,14 +244,14 @@ final class SuitcaseScene {
         camera.zNear = 1
         camera.zFar = 60
         cameraNode.camera = camera
-        let distance = 12.5, elevation = 0.56, yaw = -0.24
+        let distance = 15.0, elevation = 0.56, yaw = -0.24
         cameraNode.position = SCNVector3(
             CGFloat(distance * cos(elevation) * sin(yaw)),
             CGFloat(distance * sin(elevation)) + 1.5,
             CGFloat(distance * cos(elevation) * cos(yaw))
         )
         scene.rootNode.addChildNode(cameraNode)
-        cameraNode.look(at: SCNVector3(0, 1.55, -0.1))
+        cameraNode.look(at: SCNVector3(0, 1.9, -0.1))
     }
 
     private func buildBase() {

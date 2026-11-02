@@ -7,6 +7,8 @@
 //   &hover=playPause|knob|record|next|previous|like   hold a control's hover
 //   &fly=0.4         freeze the record handoff at progress 0..1 (a fake record leaving the table rack)
 //   &fly=seek        the same, with the progress taken from the shot time: shot.mjs out 0.2 0.5 0.8
+//   &sim=ad|skip     replay what the real app did after a PLAYLIST pick, at a slow frame rate: the record lands, 25 s of
+//                    nothing, an ad (ad: stop here), then a real track and a skip (skip: stop here)
 //   &lean=x,y        lean the case as if the cursor were there (-1..1)
 //   &menu            draw grey stand-ins for the section menu on the left edge (to check nothing is covered)
 //   &cam=x,y,z,tx,ty,tz   pin another camera
@@ -64,9 +66,9 @@ if (!bare) {
 // ---- music: the fake store, with the position pinned so frames repeat ----
 const real = createMusic();
 const pin = (s) => (shot ? { ...s, position: (Number(params.get('p')) || 0.3) * (s.duration || 200), playerState: params.get('state') === 'paused' ? 2 : s.playerState, like: params.has('liked') ? 'LIKE' : s.like } : s);
-const music = { ...real, onState: (cb) => real.onState((s) => cb(pin(s))) };
+const music = { ...real, onState: (cb) => real.onState((s) => { if (!params.has('sim')) cb(pin(s)); }) };   // ?sim feeds its own states
 const player = createPlayer({ renderer, painter, music, camera });
-const idle = params.get('state') === 'idle';
+const idle = params.get('state') === 'idle' || params.has('sim');
 let items = [];
 real.shelves().then(({ shelves }) => {
   items = shelves[0].items;
@@ -75,6 +77,8 @@ real.shelves().then(({ shelves }) => {
 if (params.has('hover')) player.suitcase.forceHover = params.get('hover');
 if (params.has('lean')) { const [x, y] = params.get('lean').split(',').map(Number); player.suitcase.lean(x, y); }
 window.__player = player;
+window.__fakeDisc = () => fakeDisc();
+window.__items = () => items;
 
 if (params.has('menu')) {
   // stand-ins for the section buttons agent A adds: four stacked words, vertically centred on the left edge
@@ -139,6 +143,24 @@ if (shot) {
     await new Promise((r) => setTimeout(r, 300));
     await player.ready();
     player.show(true, true);
+    if (params.has('sim') && !window.__simmed) {
+      window.__simmed = true;
+      const sc = player.suitcase;
+      const st = { signedIn: false, ready: true, videoId: null, title: null, artist: null, album: null, art: null, playerState: -1, position: 0, duration: 0, volume: 70, muted: false, like: null, adPlaying: false };
+      let T = 0;
+      const run = (secs, state, dt = 0.25) => { for (let i = 0; i < secs / dt; i++) { T += dt; if (state) sc.setState(state); player.update(dt, T); } };
+      player.receive(fakeDisc());
+      run(2);                                                       // a slow frame rate: 0.25 s per frame
+      run(25, { ...st, playerState: 5 });                           // nothing playing for a while
+      const ad = { ...st, videoId: 'adAAA', adPlaying: true, playerState: 1 };
+      run(20, ad);                                                  // an ad
+      if (params.get('sim') === 'skip') {
+        const t1 = { ...st, videoId: 'kd9TlGDZGkI', title: 'Walk Of Life', artist: 'Dire Straits', art: items[0].art, playerState: 1, duration: 250, position: 3 };
+        run(2, t1); await new Promise((r) => setTimeout(r, 400)); run(2, t1);
+        const t2 = { ...t1, videoId: 'next222', title: 'Another Track', art: items[1].art, position: 1 };
+        run(2, t2); await new Promise((r) => setTimeout(r, 400)); run(2, t2);
+      }
+    }
     if (params.has('fly') && !window.__flown) { window.__flown = true; player.receive(fakeDisc()); }
     for (let i = 0; i < 2; i++) {
       frame(t, params.has('fly') ? 0.0001 : 10);

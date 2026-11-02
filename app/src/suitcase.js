@@ -22,6 +22,7 @@ import { VolumeKnob } from './knob.js';
 import { RecordScrub, recordAngle } from './scrub.js';
 import { buildSuitcase, createRecordKit, caseSpace, setLabelMap } from './suitcase/model.js';
 import { COL } from './suitcase/paint.js';
+import { createLabelPolicy } from './suitcase/label.js';
 
 const now = () => performance.now() / 1000;
 const smooth = (rate, dt) => 1 - Math.exp(-rate * dt);
@@ -50,14 +51,32 @@ export function coverFromUrl(url) {
       const s = Math.min(img.width, img.height);
       g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 512, 512);
       t.needsUpdate = true;
-      res();
+      res(true);
     };
-    img.onerror = res;
+    img.onerror = () => res(false);
   });
   img.src = url;
   covers.set(url, t);
   if (covers.size > 16) { const [k, old] = covers.entries().next().value; covers.delete(k); old.dispose(); }
   return t;
+}
+
+// Do two cover textures show the same picture? (Compared as 8x8 thumbnails; anything unreadable counts as
+// the same, so a picked cover is never swapped for no reason.)
+export function sameCover(a, b) {
+  try {
+    const px = (tex) => {
+      const c = document.createElement('canvas');
+      c.width = c.height = 8;
+      const g = c.getContext('2d');
+      g.drawImage(tex.image, 0, 0, 8, 8);
+      return g.getImageData(0, 0, 8, 8).data;
+    };
+    const A = px(a), B = px(b);
+    let d = 0;
+    for (let i = 0; i < A.length; i += 4) d += Math.abs(A[i] - B[i]) + Math.abs(A[i + 1] - B[i + 1]) + Math.abs(A[i + 2] - B[i + 2]);
+    return d / (64 * 3) < 24;
+  } catch { return true; }
 }
 
 export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 'shadow', big = false } = {}) {
@@ -77,10 +96,10 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
   let enabled = true;
 
   // ---- record on the platter ----
-  let seatHas = false, held = false, dropT = 1;
+  let seatHas = false, held = false, dropT = 1, dropH = 1.1;   // dropH: how high a placed or swapped record starts above the platter
+  let songProgress = 0;                       // progress of the song itself: an ad must not move the tonearm
   let labelTex = null;
-  let claim = null;                           // a record that flew in: its cover stays on the label for the track it started
-  const claims = new Map();                   // videoId -> cover that flew in with it
+  const labels = createLabelPolicy();         // which cover the label shows (suitcase/label.js)
 
   // ---- animation ----
   let spinAngle = 0, spinSpeed = 0;
@@ -102,8 +121,9 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
   // ---- helpers ----
   const progressNow = () => {
     if (scrub) return scrub.progress;
+    if (adPlaying) return songProgress;       // an ad has its own clock: the arm stays where the song was
     if (!(duration > 0)) return 0;
-    return Math.min(1, positionNow() / duration);
+    return (songProgress = Math.min(1, positionNow() / duration));
   };
   const positionNow = () => Math.min(duration, position + (playing ? now() - stamp : 0));
   const interactive = () => enabled && hinge.openness > 0.55 && hinge.mode !== 'closing';
@@ -120,15 +140,26 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
   }
 
   // ---- state ----
+  // What the label shows: see suitcase/label.js. A swap is a quick lift and drop of the seated record.
   function syncLabel() {
     if (held) return;                          // a record is in flight; it brings its own cover
-    if (claim) {
-      if (videoId && videoId !== claim.baseVideoId) { claims.set(videoId, claim.cover); claim = null; }
-      else return;                             // still the track that flew in: keep its cover
+    const r = labels.sync(videoId, coverFromUrl(art));
+    if (r.keep) return;
+    if (r.compare) {
+      const { vid, picked, own } = r.compare;
+      // the track's own art is a different picture than the cover the record was picked with: use it once it has loaded
+      own.userData.loaded.then((ok) => { if (ok && videoId === vid && labels.claimedFor(vid) === picked && !sameCover(picked, own)) { labels.prefer(vid, own); syncLabel(); } });
     }
-    const want = claims.get(videoId) ?? coverFromUrl(art);
+    const want = r.want;
     if (!seatHas) { if (hasTrack) placeRecord(want, { animate: true }); }
-    else if (want !== labelTex && (want || !labelTex)) showLabel(want);
+    else if (want !== labelTex && (want || !labelTex)) swapLabel(want);
+  }
+
+  // A new label on the seated record: it lifts a little and drops back.
+  function swapLabel(tex) {
+    showLabel(tex);
+    dropT = 0;
+    dropH = 0.4;
   }
 
   function setState(s) {
@@ -155,10 +186,10 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
     seat.visible = true;
     showLabel(cover ?? null);
     dropT = animate ? 0 : 1;
+    dropH = 1.1;
     if (claimFor) {
-      claim = { cover: cover ?? null, baseVideoId: claimFor.baseVideoId };
-      // the new track may already be playing: then this cover belongs to it from now on
-      if (videoId && videoId !== claim.baseVideoId) { claims.set(videoId, claim.cover); claim = null; }
+      labels.land(cover, claimFor.baseVideoId);
+      syncLabel();                             // the new track may already be playing: then this cover belongs to it
     }
   }
 
@@ -187,8 +218,11 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
 
   // ---- per frame ----
   function update(dt) {
-    dt = Math.min(Math.max(dt, 0), 0.1);
-    const impact = hinge.step(dt);
+    // A slow frame (software rendering, a hidden window) must not stretch the animations out: they are
+    // analytic or smoothed, so a long step is safe. The hinge integrates in steps of its own.
+    dt = Math.min(Math.max(dt, 0), 1);
+    let impact = 0;
+    for (let rest = dt; rest > 1e-6; rest -= 0.25) impact = Math.max(impact, hinge.step(Math.min(rest, 0.25)));
     applyLid();
     if (impact > 0) thump = Math.max(thump, Math.min(impact, 8) * 0.012);
     thump *= Math.exp(-dt * 16);
@@ -202,14 +236,14 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
     caseRoot.position.y = -0.6 - thump;
 
     // record: spins up and winds down; follows the pointer while scrubbed
-    const target = playing && seatHas ? SPIN : 0;
+    const target = playing && !adPlaying && seatHas ? SPIN : 0;   // it turns only while a song plays, not during an ad
     spinSpeed += (target - spinSpeed) * smooth(playing ? 5 : 3.5, dt);
     if (!scrub) spinAngle += spinSpeed * dt;
     record.group.rotation.y = -spinAngle;
     if (dropT < 1) {
       dropT = Math.min(1, dropT + dt / 0.38);
       const e = easeOut(dropT);
-      seat.position.y = L.deckHeight + 0.06 + (1 - e) * (1 - e) * 1.1;
+      seat.position.y = L.deckHeight + 0.06 + (1 - e) * (1 - e) * dropH;
       record.group.scale.setScalar(0.9 + 0.1 * e);
     } else if (seat.position.y !== L.deckHeight + 0.06) {
       seat.position.y = L.deckHeight + 0.06;
@@ -427,6 +461,8 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
     get hasTrack() { return hasTrack; },
     get currentCover() { return labelTex; },
     thump(amount) { thump = Math.max(thump, amount); },
+    // for tests and the lab: what the platter is doing
+    get debug() { return { seatHas, held, dropT, seatY: seat.position.y, hasTrack, playing, adPlaying, claim: labels.pending, spin: spinSpeed, labelSet: !!labelTex, videoId }; },
     // the seat's world pose, for the flying record to land on
     seatMatrix() { root.updateWorldMatrix(true, true); return seat.matrixWorld; },
     ready: () => Promise.all([...covers.values()].map((t) => t.userData.loaded)),

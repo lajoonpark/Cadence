@@ -73,7 +73,7 @@ export function createFlights({ scene, suitcase, camera, view }) {
   function launch(kind, from, cover, extra = {}) {
     const { group, labelMat } = suitcase.recordKit.build(cover);
     scene.add(group);
-    const f = { kind, t: 0, from, group, labelMat, cover, spin: extra.spin ?? 0, s0: toScreen(from.pos, from.scale), ...extra };
+    const f = { kind, t: 0, wall0: performance.now(), from, group, labelMat, cover, spin: extra.spin ?? 0, s0: toScreen(from.pos, from.scale), ...extra };
     flights.push(f);
     pose(f);
     return f;
@@ -166,9 +166,12 @@ export function createFlights({ scene, suitcase, camera, view }) {
 
   function update(dt) {
     if (frozen) { for (const f of flights) pose(f); return; }
-    dt = Math.min(dt, 0.1);
+    dt = Math.min(dt, 1);
+    const now = performance.now();
     for (const f of [...flights]) {
       f.t += dt;
+      // a flight that somehow outlasts its time by a lot (a stalled loop) lands now: a record never hangs
+      if (now - f.wall0 > (T_IN + 4) * 1000) f.t = Math.max(f.t, T_IN);
       f.spin += (f.rate ?? 4) * dt;
       pose(f);
       if (f.kind === 'in' && f.t >= T_IN) land(f);

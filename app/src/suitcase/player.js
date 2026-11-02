@@ -118,7 +118,12 @@ export function createPlayer({ renderer, painter, music, camera }) {
     e.stopPropagation();
   }, { capture: true, passive: true });
 
+  let lastWall = performance.now();
   function update(dt, t) {
+    // wall-clock step: a slow frame must not stretch a flight (the record would hang in mid-air under software rendering)
+    const now = performance.now();
+    dt = Math.min(1, Math.max(dt, (now - lastWall) / 1000));
+    lastWall = now;
     if (camera.aspect !== aspect || camera.fov !== fov || (renderer.domElement.clientHeight || innerHeight) !== viewH) layout();
     if (pointer) {
       // lean toward the cursor, relative to where the case sits (the whole screen is its range)

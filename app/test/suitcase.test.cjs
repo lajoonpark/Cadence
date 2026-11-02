@@ -347,3 +347,56 @@ test('layout: the big controls (in-shop overlay) fit the deck, do not overlap an
   assert.ok(c.knobRadius > small.knobRadius * 1.2);
   for (const n of Object.keys(c.buttons)) assert.ok(c.buttons[n].radius > small.buttons[n].radius * 1.3, n);
 });
+
+// ---- the record's label: which cover it shows through a pick, ads and track changes ----
+test('label: a playlist pick keeps its cover through the wait and an ad, then follows the real tracks', async () => {
+  const { createLabelPolicy } = await load('suitcase/label');
+  const l = createLabelPolicy();
+  l.land('PLAYLIST', null);                         // picked a playlist: no videoId to compare with
+  assert.deepStrictEqual(l.sync(null, null), { keep: true });          // 25 s of nothing playing
+  assert.deepStrictEqual(l.sync(null, null), { keep: true });          // the ad: ytm-page leaves videoId out while adPlaying
+  assert.ok(l.pending);
+  const first = l.sync('T1', 'ART1');                                  // the first real song
+  assert.strictEqual(first.want, 'PLAYLIST');                          // still the picked cover until its art is known to differ
+  assert.deepStrictEqual(first.compare, { vid: 'T1', picked: 'PLAYLIST', own: 'ART1' });
+  assert.ok(!l.pending);
+  l.prefer('T1', 'ART1');                                              // the caller found the art is a different picture
+  assert.strictEqual(l.sync('T1', 'ART1').want, 'ART1');
+  assert.strictEqual(l.sync('T2', 'ART2').want, 'ART2');               // skip: the next track's own art
+  assert.strictEqual(l.sync('T1', 'ART1').want, 'ART1');               // and back
+});
+
+test('label: a song pick keeps its cover when the playing track has the same picture', async () => {
+  const { createLabelPolicy } = await load('suitcase/label');
+  const l = createLabelPolicy();
+  l.land('SONGCOVER', 'OLD');
+  assert.deepStrictEqual(l.sync('OLD', 'OLDART'), { keep: true });     // the old song is still reported for a moment
+  const r = l.sync('NEW', 'NEWART');
+  assert.strictEqual(r.want, 'SONGCOVER');
+  assert.ok(r.compare);                                                // caller compares; the same picture means no prefer()
+  assert.strictEqual(l.sync('NEW', 'NEWART').want, 'SONGCOVER');       // and it stays
+  assert.strictEqual(l.sync('NEXT', 'NEXTART').want, 'NEXTART');
+});
+
+test('label: the new track may already be playing when the record lands', async () => {
+  const { createLabelPolicy } = await load('suitcase/label');
+  const l = createLabelPolicy();
+  l.land('COVER', 'OLD');
+  assert.strictEqual(l.sync('NEW', null).want, 'COVER');               // no art known: the picked cover stays
+  assert.ok(!l.pending);
+});
+
+test('label: with no pick, tracks show their own art, and a track without art keeps the plain label', async () => {
+  const { createLabelPolicy } = await load('suitcase/label');
+  const l = createLabelPolicy();
+  assert.strictEqual(l.sync('A', 'ARTA').want, 'ARTA');
+  assert.strictEqual(l.sync('B', null).want, null);
+});
+
+test('label: picking the song that is already playing keeps waiting, so the cover is not lost', async () => {
+  const { createLabelPolicy } = await load('suitcase/label');
+  const l = createLabelPolicy();
+  l.land('COVER', 'SAME');
+  assert.deepStrictEqual(l.sync('SAME', 'ART'), { keep: true });
+  assert.ok(l.pending);
+});

@@ -14,7 +14,8 @@ Milestone 1 (this folder): the opening shot. A narrow Tuscan alley of brick and 
 
 ```
 npm install
-npm run dev                 # vite on http://127.0.0.1:5173 (open in a browser)
+npm run dev                 # vite dev server + opens the Electron window; menu bar icon has "Open Cadence"
+npm run web                 # just vite on http://127.0.0.1:5173 (open in a browser)
 npm run build && npm run electron
 CADENCE_DEV_URL=http://127.0.0.1:5173 npm run electron   # electron against the dev server
 node scripts/shot.mjs out_dir 0 3.6 5 8.5   # headless screenshots at given seconds

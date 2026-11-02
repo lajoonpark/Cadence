@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('cadence', {
   home: (next) => ipcRenderer.invoke('ytm:home', next),
+  search: (q) => ipcRenderer.invoke('ytm:search', q),
+  playlistArt: (play) => ipcRenderer.invoke('ytm:playlistArt', play),
   play: (endpoint) => ipcRenderer.invoke('ytm:play', endpoint),
   command: (name, arg) => ipcRenderer.invoke('ytm:command', name, arg),
   signIn: () => ipcRenderer.invoke('ytm:signIn'),

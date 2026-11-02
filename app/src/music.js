@@ -2,15 +2,29 @@
 // electron/preload.cjs). In a plain browser (`npm run web`, screenshots) it is a fake record
 // store with painted covers, so the rack and buttons can be worked on without an account.
 import { rng } from './rand.js';
+import { repairArt } from './cover.js';
 
 export function createMusic() {
   return window.cadence ? realMusic(window.cadence) : fakeMusic();
 }
 
+// onArt listeners: called with an item after its art was replaced in place.
+const artListeners = [];
+const artChanged = (item) => { for (const cb of artListeners) cb(item); };
+
 function realMusic(c) {
   return {
     real: true,
-    shelves: (next) => c.home(next), // -> { shelves, next }
+    // -> { shelves, next }, returned at once. Covers that are missing or fail to load are repaired in the
+    // background (src/cover.js); onArt(cb) tells you each item whose item.art was then replaced.
+    shelves: async (next) => {
+      const res = await c.home(next);
+      repairArt(res.shelves.flatMap((s) => s.items), { getSongArts: (play) => c.playlistArt(play), onChange: artChanged });
+      return res;
+    },
+    onArt: (cb) => artListeners.push(cb),
+    // Songs matching a query -> [{ kind: 'song', title, subtitle (artist), album, duration (s), art, play }]
+    search: (q) => c.search(q),
     play: (item) => c.play(item.play),
     command: (name, arg) => c.command(name, arg),
     signIn: () => c.signIn(),
@@ -72,9 +86,26 @@ function fakeShelves() {
   }));
 }
 
+// ?playlists=1 adds a shelf of playlists whose covers are missing or broken, to try the collage fallback.
+function fakePlaylists(songs) {
+  const names = ['Sunday Slow Down', 'Terracotta Mix', 'Night Garden', 'Lemon Hours Radio'];
+  return {
+    title: 'Playlists',
+    items: names.map((title, i) => ({
+      kind: 'playlist',
+      title,
+      subtitle: 'Playlist',
+      art: i % 2 ? null : 'https://invalid.invalid/cover.jpg', // blank, then a cover that fails to load
+      play: { playlistId: `fakepl${i}` },
+    })),
+  };
+}
+
 function fakeMusic() {
   const shelves = fakeShelves();
   const all = shelves.flatMap((s) => s.items);
+  const withPlaylists = new URLSearchParams(location.search).has('playlists');
+  if (withPlaylists) shelves.push(fakePlaylists(all));
   const listeners = [];
   const st = { signedIn: true, ready: true, videoId: null, title: null, artist: null, art: null, playerState: -1, position: 0, duration: 0, volume: 70, muted: false, like: 'INDIFFERENT', adPlaying: false };
   let queue = [];
@@ -101,7 +132,25 @@ function fakeMusic() {
   };
   return {
     real: false,
-    shelves: async () => ({ shelves, next: null }),
+    shelves: async () => {
+      // like the real store: shelves now, repairs of the broken playlist covers a moment later
+      if (withPlaylists) repairArt(shelves.flatMap((s) => s.items), { getSongArts: async (play) => { await new Promise((r) => setTimeout(r, 400)); return all.slice(0, 40).filter((_, i) => i % 9 === Number(play.playlistId.slice(-1))).slice(0, 4).map((i) => i.art); }, onChange: artChanged });
+      return { shelves, next: null };
+    },
+    onArt: (cb) => artListeners.push(cb),
+    search: async (q) => {
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      await new Promise((r) => setTimeout(r, 180)); // a network-ish delay, so the loading state shows
+      if (!words.length) return [];
+      const seen = new Set();
+      return all.filter((i) => {
+        const hay = `${i.title} ${i.subtitle}`.toLowerCase();
+        const key = hay;
+        if (seen.has(key) || !words.every((w) => hay.includes(w))) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 12);
+    },
     play: async (item) => {
       const shelf = shelves.find((s) => s.items.includes(item));
       queue = shelf ? shelf.items : all;

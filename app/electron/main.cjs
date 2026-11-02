@@ -20,6 +20,7 @@ function startPlayer() {
   ipcMain.handle('ytm:play', (_e, endpoint) => ytm.play(endpoint));
   ipcMain.handle('ytm:command', (_e, name, arg) => ytm.command(name, arg));
   ipcMain.handle('ytm:signIn', () => ytm.signIn(win));
+  for (const [name, fn] of Object.entries(ytm.ipc)) ipcMain.handle(`ytm:${name}`, (_e, ...args) => fn(...args)); // ytm:search, ytm:playlistArt
 }
 
 function createWindow() {

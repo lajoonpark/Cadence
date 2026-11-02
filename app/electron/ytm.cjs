@@ -4,10 +4,12 @@
 const { BrowserWindow, app } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseShelves, continuation } = require('./ytm-parse.cjs');
+const { parseShelves, parseSearch, parsePlaylistSongs, continuation, artDebug } = require('./ytm-parse.cjs');
 
 const PARTITION = 'persist:ytm'; // cookies survive restarts, so you sign in once
 const HOME = 'https://music.youtube.com/';
+// The "songs" filter of YouTube Music search (the same params ytmusicapi uses; checked live).
+const SONGS_FILTER = 'EgWKAQIIAWoMEA4QChADEAQQCRAF';
 const PAGE_JS = fs.readFileSync(path.join(__dirname, 'ytm-page.js'), 'utf8');
 
 // Google refuses to sign in "embedded browsers"; a plain Chrome user agent (Electron's minus the
@@ -66,13 +68,68 @@ function createYtm({ onState, onSignedIn }) {
     }
   }
 
-  const api = async (endpoint, body) => { await ready(); return js(`window.__cadence.api(${JSON.stringify(endpoint)}, ${JSON.stringify(body)})`); };
+  // CADENCE_DUMP=1 saves every raw response to <userData>/dumps/<endpoint>-<time>-<n>.json, so a
+  // signed-in response can be copied into test/fixtures when something parses wrong.
+  let dumped = 0;
+  function dump(endpoint, body, res) {
+    if (!process.env.CADENCE_DUMP) return;
+    try {
+      const dir = path.join(app.getPath('userData'), 'dumps');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${endpoint}-${new Date().toISOString().replace(/[:.]/g, '-')}-${dumped++}.json`);
+      fs.writeFileSync(file, JSON.stringify({ request: body, response: res }));
+      console.warn('[cadence] dumped', file);
+    } catch (e) { console.warn('[cadence] dump failed', e.message); }
+  }
+
+  const api = async (endpoint, body) => {
+    await ready();
+    const res = await js(`window.__cadence.api(${JSON.stringify(endpoint)}, ${JSON.stringify(body)})`);
+    dump(endpoint, body, res);
+    return res;
+  };
+
+  // An item with no cover is a bug somewhere in parsing: say which renderer it came from.
+  const onNoArt = (item, renderer) => console.warn(`[cadence] no art for ${item.kind} "${item.title}"; renderer keys: ${Object.keys(renderer).join(',')}; image-ish paths: ${artDebug(renderer).join(' ') || 'none'}`);
 
   // Home shelves ("Listen again", "Quick picks", mixes...), one page at a time: call again with
   // `next` for more (later pages come from continuations).
   async function home(next) {
     const res = await api('browse', next ? { continuation: next } : { browseId: 'FEmusic_home' });
-    return { shelves: parseShelves(res), next: continuation(res) };
+    return { shelves: parseShelves(res, { onNoArt }), next: continuation(res) };
+  }
+
+  // Songs only: [{ kind: 'song', title, subtitle (artist), album, duration (s), art, play: { videoId } }]
+  async function search(query) {
+    const q = String(query ?? '').trim();
+    if (!q) return [];
+    return parseSearch(await api('search', { query: q, params: SONGS_FILTER }), { onNoArt });
+  }
+
+  // Cover urls (up to 4, 256 px) of the first songs of a playlist, album, mix or radio: the renderer
+  // paints a collage from them when the item has no cover of its own or its cover fails to load.
+  // Playlists and albums come from browse VL<id>; mixes/radios (RD...) from the `next` queue.
+  const songArts = new Map();
+  async function playlistArt(play) {
+    const id = play?.playlistId;
+    if (!id) return [];
+    if (!songArts.has(id)) {
+      const viaNext = () => api('next', { playlistId: id, videoId: play.videoId, params: play.params, isAudioOnly: true });
+      const viaBrowse = () => api('browse', { browseId: id.startsWith('VL') ? id : `VL${id}` });
+      const mix = /^RD/.test(id) && !/^RDCLAK/.test(id);
+      const attempt = (async () => {
+        for (const get of mix ? [viaNext, viaBrowse] : [viaBrowse, viaNext]) {
+          try {
+            const arts = [...new Set(parsePlaylistSongs(await get()).map((x) => x.art).filter(Boolean))];
+            if (arts.length) return arts.slice(0, 4).map((u) => u.replace('w544-h544', 'w256-h256'));
+          } catch (e) { console.warn('[cadence] playlistArt', id, e.message); }
+        }
+        return [];
+      })();
+      songArts.set(id, attempt);
+      attempt.then((a) => { if (!a.length) songArts.delete(id); }); // do not cache failures
+    }
+    return songArts.get(id);
   }
 
   async function play(endpoint) {
@@ -128,7 +185,9 @@ function createYtm({ onState, onSignedIn }) {
     });
   }
 
-  return { home, play, command, signIn, window: win };
+  // Request handlers main.cjs registers as ipc channels ytm:<name> (renderer: window.cadence.<name>).
+  const ipc = { search, playlistArt };
+  return { home, play, command, signIn, ipc, search, playlistArt, window: win };
 }
 
 module.exports = { createYtm };

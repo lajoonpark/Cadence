@@ -21,9 +21,10 @@ log('main window', page.url());
 await page.waitForFunction(() => window.__cadenceDebug?.shelves.length > 0, null, { timeout: 180000 });
 log('shelves', await page.evaluate(() => window.__cadenceDebug.shelves.map((s) => `${s.title}(${s.items.length})`).join(', ')));
 // the intro ends at HOME; then fly to station 0 (the crate table) and wait until we are settled there
+// (SwiftShader under xvfb runs a few frames a second and flights advance per frame, so allow minutes)
 await page.waitForFunction(() => window.__cadenceDebug.state.introDone, null, { timeout: 60000 });
 await page.evaluate(() => window.__cadenceDebug.go(0));
-await page.waitForFunction(() => window.__cadenceDebug.state.settled && window.__cadenceDebug.state.at === 0, null, { timeout: 30000 });
+await page.waitForFunction(() => window.__cadenceDebug.state.settled && window.__cadenceDebug.state.at === 0, null, { timeout: 240000 });
 await new Promise((r) => setTimeout(r, 2500)); // the records drop in
 const vp = await page.evaluate(() => [innerWidth, innerHeight]);
 log('viewport', vp);

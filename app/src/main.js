@@ -191,22 +191,37 @@ function padShelves(list) {
   return out;
 }
 
+// Station preferences must win ("Quick picks" belongs on the crate table), so the shelves are placed
+// ONCE, when every page is in, or when the camera first reaches home (the racks are not visible
+// before that), or straight away when a ?at shot starts: whichever comes first. Anything that
+// arrives after that only fills empty stations (no reshuffling).
 const SHELF_PAGES = 3;
+let everPlaced = false;       // the very first placement has happened
+let placedThisLoad = false;   // this load has been placed (later pages then only fill free stations)
+function placeFirst() {
+  if (everPlaced || !shelves.length) return;
+  placeShelves(padShelves(shelves), { first: true });
+  everPlaced = placedThisLoad = true;
+}
 async function loadShelves() {
+  placedThisLoad = false;
   try {
-    // show the first page as soon as it arrives, then add the rest behind it
     let page = await music.shelves();
     shelves = page.shelves.slice();
-    placeShelves(padShelves(shelves), { first: true });
+    if (!everPlaced && startAt !== null) placeFirst(); // ?at shot: no intro to wait for
     for (let i = 1; i < SHELF_PAGES && page.next; i++) {
       page = await music.shelves(page.next);
       shelves.push(...page.shelves);
-      placeShelves(padShelves(shelves));
+      if (placedThisLoad) placeShelves(padShelves(shelves));
     }
-    placeShelves(padShelves(shelves), { prune: true });
   } catch (e) {
     console.warn('could not load shelves', e);
   } finally {
+    // everything is in (or the load failed part-way): place now unless the camera got home first
+    if (shelves.length) {
+      placeShelves(padShelves(shelves), { first: !placedThisLoad, prune: true });
+      everPlaced = placedThisLoad = true;
+    }
     shelvesLoaded = true;
   }
 }
@@ -295,10 +310,12 @@ let lastT = 0;
 let hoverOn = -1;
 let pickDone = false;
 function frame(t, dtOverride, draw = true) {
-  const dt = dtOverride ?? Math.min(0.1, Math.max(0, t - lastT));
+  // wall-clock time: a slow frame rate must not stretch flights, so allow a long step (nav and racks cope)
+  const dt = dtOverride ?? Math.min(0.25, Math.max(0, t - lastT));
   lastT = curT = t;
   timeOfDay.update(t);
   const pose = nav.update(t, dt);
+  if (!everPlaced && nav.introDone) placeFirst(); // the camera reached home before the last page came in
   const c = pinnedPose ?? pose;
   rig.position.copy(c.pos);
   if (skylightBeam) {

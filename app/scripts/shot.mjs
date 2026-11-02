@@ -1,4 +1,5 @@
 // Render the scene at given times with headless Chromium. Usage: node scripts/shot.mjs out_dir t1 t2 ...
+// The page must set window.__ready and window.__seek(t) in ?shot mode.
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { mkdirSync } from 'node:fs';
@@ -12,7 +13,9 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('console', (m) => console.log('[page]', m.text()));
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 const query = process.env.CADENCE_QUERY ? `&${process.env.CADENCE_QUERY}` : '';
-await page.goto(`http://127.0.0.1:5199/?shot${query}`);
+// CADENCE_PAGE=lab.html (or mini.html...) shoots another page of the app instead of the shop
+const pageName = process.env.CADENCE_PAGE || '';
+await page.goto(`http://127.0.0.1:5199/${pageName}?shot${query}`);
 await page.waitForFunction('window.__ready === true', null, { timeout: 60000 });
 for (const t of (times.length ? times : ['0', '3', '5', '8'])) {
   await page.evaluate((s) => window.__seek(s), Number(t));

@@ -1,5 +1,6 @@
 // End-to-end check of the real app against YouTube Music (no account needed; guests get ads).
-// Waits for shelves, sweeps the cursor over the rack, clicks a record, checks it plays, presses buttons.
+// Waits for shelves, flies to the crate table, sweeps the cursor over the rack, clicks a record, checks it plays,
+// then pauses and skips with the keys (the suitcase's own controls are 3D, so the keyboard is the stable way).
 // Usage (Linux server): npm run build && xvfb-run -a node scripts/e2e-electron.mjs out_dir
 import { _electron as electron } from 'playwright';
 const S = process.argv[2];
@@ -19,7 +20,11 @@ page.on('pageerror', (e) => log('[pageerror]', e.message));
 log('main window', page.url());
 await page.waitForFunction(() => window.__cadenceDebug?.shelves.length > 0, null, { timeout: 180000 });
 log('shelves', await page.evaluate(() => window.__cadenceDebug.shelves.map((s) => `${s.title}(${s.items.length})`).join(', ')));
-await new Promise((r) => setTimeout(r, 14000)); // intro + walk to the rack
+// the intro ends at HOME; then fly to station 0 (the crate table) and wait until we are settled there
+await page.waitForFunction(() => window.__cadenceDebug.state.introDone, null, { timeout: 60000 });
+await page.evaluate(() => window.__cadenceDebug.go(0));
+await page.waitForFunction(() => window.__cadenceDebug.state.settled && window.__cadenceDebug.state.at === 0, null, { timeout: 30000 });
+await new Promise((r) => setTimeout(r, 2500)); // the records drop in
 const vp = await page.evaluate(() => [innerWidth, innerHeight]);
 log('viewport', vp);
 // sweep across the rack
@@ -32,7 +37,7 @@ await page.mouse.move(vp[0] * 0.5, vp[1] * 0.5);
 await new Promise((r) => setTimeout(r, 1200));
 await page.screenshot({ path: `${S}/e2e-hover.png` });
 const idx = await page.evaluate(() => window.__cadenceDebug.rack.hovered);
-const item = await page.evaluate((i) => window.__cadenceDebug.shelves[0].items[i], idx);
+const item = await page.evaluate((i) => { const t = window.__cadenceDebug.stations[0].shelf; const shelf = window.__cadenceDebug.shelves.find((s) => s.title === t) ?? window.__cadenceDebug.shelves[0]; return shelf.items[i]; }, idx);
 log('clicking', idx, item?.title, JSON.stringify(item?.play));
 await page.mouse.click(vp[0] * 0.5, vp[1] * 0.5);
 for (let i = 0; i < 20; i++) {
@@ -46,10 +51,10 @@ await page.screenshot({ path: `${S}/e2e-playing.png` });
 await page.keyboard.press('Space');
 await new Promise((r) => setTimeout(r, 1200));
 log('after Space', await page.evaluate(() => window.__cadenceDebug.player.playerState));
-await page.locator('.deck button').nth(1).click({ force: true }); // play/pause (the stack is always tilting, so never "stable")
+await page.keyboard.press('Space');
 await new Promise((r) => setTimeout(r, 1200));
-log('after PLAY click', await page.evaluate(() => window.__cadenceDebug.player.playerState));
-await page.locator('.deck button').nth(2).click({ force: true }); // skip
+log('after second Space', await page.evaluate(() => window.__cadenceDebug.player.playerState));
+await page.keyboard.press('ArrowRight'); // skip
 await new Promise((r) => setTimeout(r, 4000));
 const p2 = await page.evaluate(() => window.__cadenceDebug.player);
 log('after SKIP', p2.videoId, p2.title, p2.adPlaying ? 'AD' : '');

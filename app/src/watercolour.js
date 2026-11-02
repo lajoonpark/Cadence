@@ -103,15 +103,38 @@ void main() {
   // 6. unpainted ragged border, like a painting that stops short of the sheet edge
   vec2 e = min(vUv, 1.0 - vUv) * vec2(aspect, 1.0);
   float border = min(e.x, e.y) + (fbm(q * 9.0 + seed * 0.3) - 0.5) * 0.05;
+#ifdef CARD
+  border -= 0.05; // a wider paper margin: the sheet itself is the card
+#endif
   float paint = smoothstep(0.0, 0.045, border);
   vec3 paperShade = paper * (0.94 + 0.06 * h);
   col = mix(paperShade, col, paint);
 
+#ifdef CARD
+  // The sheet is a torn card with a deckle edge; beyond it the window is transparent (premultiplied).
+  float sheet = min(e.x, e.y) + (fbm(q * 13.0 + 5.0) - 0.5) * 0.04 + (noise(q * 75.0) - 0.5) * 0.008 - 0.02;
+  float a = smoothstep(0.0, 0.006, sheet);
+  gl_FragColor = vec4(col * a, a);
+#else
   gl_FragColor = vec4(col, 1.0);
+#endif
 }
 `;
 
-export function createWatercolour(renderer) {
+// Draws `overlay` ({ scene, camera }) on top of what is already in the target, with the depth
+// cleared so it never clips into the world (a camera-space HUD that is still painted).
+export function renderOverlay(renderer, overlay) {
+  if (!overlay) return;
+  const auto = renderer.autoClear;
+  renderer.autoClear = false;
+  renderer.clearDepth();
+  renderer.render(overlay.scene, overlay.camera);
+  renderer.autoClear = auto;
+}
+
+// { card: true } turns the unpainted border into a deckle-edged card and makes everything beyond it
+// transparent (for the small frameless window; the renderer needs alpha: true).
+export function createWatercolour(renderer, { card = false } = {}) {
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   const target = new THREE.WebGLRenderTarget(size.x, size.y, {
     type: THREE.HalfFloatType,
@@ -122,6 +145,7 @@ export function createWatercolour(renderer) {
   const material = new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
+    defines: card ? { CARD: '' } : {},
     uniforms: {
       tScene: { value: target.texture },
       tDepth: { value: target.depthTexture },
@@ -144,7 +168,9 @@ export function createWatercolour(renderer) {
   const dir = new THREE.Vector3();
 
   return {
-    render(scene, camera, t) {
+    // overlay = { scene, camera }: drawn into the same target after the world, depth cleared, so it is
+    // painted by the same pass but never hidden by (or clipped into) the walls.
+    render(scene, camera, t, overlay) {
       const u = material.uniforms;
       u.seed.value = (Math.floor(t * BOIL_FPS) % 64) * 1.37;
       u.near.value = camera.near;
@@ -160,6 +186,7 @@ export function createWatercolour(renderer) {
 
       renderer.setRenderTarget(target);
       renderer.render(scene, camera);
+      renderOverlay(renderer, overlay);
       renderer.setRenderTarget(null);
       renderer.render(post, postCam);
     },

@@ -1,12 +1,13 @@
-// Player buttons: a stack of words in the bottom-left, each one left as bare paper inside a
-// dark watercolour brush stroke (the way a painter masks out whites). The stack is turned inward,
-// toward the middle of the screen, and tilts with the cursor. Idea from a game title screen
-// (PLAY / CREDITS), repainted for the shop.
+// Brush-stroke words and the now-playing paper tag. The player itself is the 3D suitcase
+// (suitcase.js); what lives here is its caption: title, artist and a progress line you can click to
+// seek, plus the SIGN IN word. (createControls, the old stack of PLAY / SKIP / BACK / LIKE words,
+// is kept until main.js stops using it.) Words are left as bare paper inside a dark watercolour
+// brush stroke, the way a painter masks out whites.
 import { rng } from './rand.js';
 import { FONT } from './style.js';
 
 export const INK = '#2d3158';   // indigo wash
-const HOT = '#b4503a';   // terracotta on hover / liked
+export const HOT = '#b4503a';   // terracotta on hover / liked
 export const PAPER = '#fbf5e8';
 
 // One broad brush stroke as an image: layered thin washes with ragged edges, a darker wet edge,
@@ -178,6 +179,118 @@ export function createControls({ onCommand, onSignIn }) {
       capA.textContent = s.adPlaying ? 'your record plays next' : [s.artist, s.album].filter(Boolean).join(' · ');
       duration = s.duration || 0;
       capFill.style.width = `${duration ? Math.min(100, (s.position / duration) * 100) : 0}%`;
+    },
+  };
+}
+
+
+// ---- the paper caption beside the suitcase ----
+const TAG_CSS = `
+.cad-tag { position: fixed; z-index: 2; pointer-events: none; opacity: 0; transition: opacity .9s ease; user-select: none;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-family: ${FONT}; }
+.cad-tag.show { opacity: 1; }
+.cad-tag.shop { left: 27vw; bottom: 3.4vh; width: max-content; max-width: min(34vw, 440px);
+  perspective: 900px; }   /* the player docks it beside the case with dock() */
+.cad-tag.shop > .turn { transform-origin: 0% 50%; will-change: transform; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 100%; }
+.cad-tag.mini { position: absolute; left: 50%; bottom: 8.5%; transform: translateX(-50%); width: 76%; align-items: center; }
+.cad-tag .cap { pointer-events: auto; padding: 8px 20px 10px 16px; max-width: 100%; box-sizing: border-box; min-width: 200px;
+  background: ${PAPER}; color: #2b2436;
+  clip-path: polygon(0 6%, 18% 0, 47% 4%, 72% 0, 100% 5%, 98% 52%, 100% 96%, 66% 100%, 38% 95%, 9% 100%, 2% 60%);
+  filter: drop-shadow(0 2px 0 rgba(60,40,30,.15)); transform: rotate(-2deg); transition: opacity .4s; }
+.cad-tag.mini .cap { width: 100%; }
+.cad-tag .cap .t { font-size: 27px; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cad-tag .cap .a { font-size: 19px; color: #7a5a40; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cad-tag .cap .bar { position: relative; height: 14px; margin-top: 5px; cursor: pointer; }
+.cad-tag .cap .bar::before { content: ''; position: absolute; left: 0; right: 0; top: 5px; height: 2px; background: rgba(45,49,88,.2); border-radius: 2px; transition: height .15s, top .15s; }
+.cad-tag .cap .bar:hover::before { top: 4px; height: 4px; }
+.cad-tag .cap .bar i { position: absolute; left: 0; top: 3px; height: 6px; border-radius: 3px 6px 6px 3px; background: ${INK}; opacity: .85; transition: background .15s, height .15s, top .15s; }
+.cad-tag .cap .bar:hover i { top: 2px; height: 8px; background: ${HOT}; }
+.cad-tag .cap.empty { opacity: 0; pointer-events: none; }
+.cad-tag button { pointer-events: auto; position: relative; border: 0; padding: 0; background: none; cursor: pointer;
+  font-family: ${FONT}; color: ${PAPER}; line-height: 1; letter-spacing: .02em; margin-left: 10px;
+  transition: transform .18s cubic-bezier(.3,1.6,.5,1); }
+.cad-tag button .plate { position: absolute; inset: 0; background-size: 100% 100%; transition: opacity .25s; }
+.cad-tag button .plate.hot { opacity: 0; }
+.cad-tag button:hover .plate.hot { opacity: 1; }
+.cad-tag button:hover { transform: translateX(5px) rotate(-1deg); }
+.cad-tag button:active { transform: translateX(3px) scale(.97); }
+.cad-tag button span { position: relative; display: block; text-shadow: 0 0 1px rgba(251,245,232,.7); font-size: 38px; padding: 5px 40px 3px 26px; }
+`;
+
+// Title / artist / progress line on a torn paper tag, and the SIGN IN word when needed.
+//   variant 'shop': fixed beside the suitcase in the bottom-left; 'mini': inside the small window's card.
+export function createCaption({ parent = document.body, variant = 'shop', onSeek, onSignIn } = {}) {
+  if (!document.getElementById('cad-tag-css')) {
+    const st = document.createElement('style');
+    st.id = 'cad-tag-css';
+    st.textContent = TAG_CSS;
+    document.head.appendChild(st);
+  }
+  const root = document.createElement('div');
+  root.className = `cad-tag ${variant}`;
+  const turn = document.createElement('div');
+  turn.className = 'turn';
+  root.appendChild(turn);
+  const signin = document.createElement('button');
+  signin.style.display = 'none';
+  signin.innerHTML = '<div class="plate"></div><div class="plate hot"></div><span>SIGN IN</span>';
+  signin.addEventListener('click', (e) => { e.stopPropagation(); onSignIn?.(); });
+  const cap = document.createElement('div');
+  cap.className = 'cap empty';
+  cap.innerHTML = '<div class="t"></div><div class="a"></div><div class="bar"><i></i></div>';
+  turn.append(signin, cap);
+  parent.appendChild(root);
+  const capT = cap.querySelector('.t'), capA = cap.querySelector('.a'), bar = cap.querySelector('.bar'), fill = cap.querySelector('.bar i');
+
+  const paint = () => {
+    const { width, height } = signin.getBoundingClientRect();
+    if (!width) return;
+    const [cold, hot] = signin.querySelectorAll('.plate');
+    cold.style.backgroundImage = `url(${brushStroke(Math.ceil(width), Math.ceil(height), INK, 41)})`;
+    hot.style.backgroundImage = `url(${brushStroke(Math.ceil(width), Math.ceil(height), HOT, 41)})`;
+  };
+  const fontReady = (document.fonts?.load(`38px ${FONT}`) ?? Promise.resolve()).then(paint, paint);
+
+  let duration = 0, scrubP = null, lastP = 0;
+  bar.addEventListener('click', (e) => {
+    const b = bar.getBoundingClientRect();
+    if (duration > 0) onSeek?.(Math.min(1, Math.max(0, (e.clientX - b.left) / b.width)) * duration);
+  });
+
+  return {
+    el: root,
+    ready: () => fontReady,
+    show(on, instant = false) {
+      if (instant) root.style.transition = 'none';
+      root.classList.toggle('show', on);
+    },
+    // Pin the tag beside the suitcase: CSS px from the left and the bottom of the view.
+    dock({ left, bottom, maxWidth }) {
+      root.style.left = `${Math.round(left)}px`;
+      root.style.bottom = `${Math.round(bottom)}px`;
+      root.style.maxWidth = `${Math.round(maxWidth)}px`;
+    },
+    // Its box on screen while it shows something, else null.
+    rect() {
+      const has = !cap.classList.contains('empty') || signin.style.display !== 'none';
+      return root.classList.contains('show') && has ? root.getBoundingClientRect() : null;
+    },
+    // Turned in toward the middle of the screen like the old word stack; tilts with the cursor (tx, ty in -1..1).
+    tilt(tx, ty) {
+      turn.style.transform = `rotateY(${14 + tx * 6}deg) rotateX(${-ty * 4}deg)`;
+    },
+    // Show this fraction instead of the player's position while the record is being dragged (null = follow the player).
+    setScrub(p) { scrubP = p; fill.style.width = `${p == null ? lastP : p * 100}%`; },
+    setState(s, { real = false } = {}) {
+      const show = real && s.ready && !s.signedIn ? '' : 'none';
+      if (signin.style.display !== show) { signin.style.display = show; if (!show) fontReady.then(paint); }
+      const has = !!(s.title || s.adPlaying);
+      cap.classList.toggle('empty', !has);
+      capT.textContent = s.adPlaying ? 'A short ad…' : s.title ?? '';
+      capA.textContent = s.adPlaying ? 'your record plays next' : [s.artist, s.album].filter(Boolean).join(' · ');
+      duration = s.duration || 0;
+      lastP = duration ? Math.min(100, (s.position / duration) * 100) : 0;
+      if (scrubP == null) fill.style.width = `${lastP}%`;
     },
   };
 }

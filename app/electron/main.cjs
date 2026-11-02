@@ -3,6 +3,7 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require('electron');
 const path = require('node:path');
 const { createYtm } = require('./ytm.cjs');
+const { createMini } = require('./mini.cjs');
 
 // Music starts when you pick a record, without a click inside the YouTube Music page itself.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -10,10 +11,11 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 let win = null;
 let tray = null;
 let ytm = null;
+let mini = null;   // the small window (Ctrl+Alt+Space), see mini.cjs
 
 function startPlayer() {
   ytm = createYtm({
-    onState: (s) => win?.webContents.send('ytm:state', s),
+    onState: (s) => { win?.webContents.send('ytm:state', s); mini?.send('ytm:state', s); },   // both windows show the player
     onSignedIn: () => win?.webContents.send('ytm:signedIn'),
   });
   ipcMain.handle('ytm:home', (_e, next) => ytm.home(next));
@@ -72,6 +74,10 @@ if (!app.requestSingleInstanceLock()) {
     startPlayer();
     createWindow();   // open on start
     createTray();
+    mini = createMini();
+    mini.register();
+    setTimeout(() => mini.prewarm(), 4000);
+    if (process.env.CADENCE_TEST) global.__cadenceMini = mini;   // lets scripts/e2e drive it without pressing keys
     app.on('activate', openCadence);
   });
   // Stay alive in the menu bar after the window is closed on macOS (the music keeps playing).

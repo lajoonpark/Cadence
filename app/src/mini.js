@@ -1,0 +1,186 @@
+// The small window (mini.html): the same suitcase on a torn-paper watercolour card, summoned with
+// Ctrl+Alt+Space anywhere. The lid is flicked open by the physical hinge (lid.js). Esc, a click on
+// the margin, clicking outside the window (main process sends close) or the shortcut again shuts
+// the lid, then the window is hidden. In a plain browser it previews on a fake desktop with the
+// fake record store; ?shot + window.__seek(t) make deterministic frames (t = seconds since the
+// lid was released).
+//   shot times: seconds since the lid was released; -1 = the lid still shut
+//   ?p=0.3  how far through the song     ?hover=playPause|knob|record|next|previous|like
+//   ?liked  show the song liked          ?paused  show it paused         ?idle  nothing playing
+import * as THREE from 'three';
+import '@fontsource/caveat-brush';
+import { WATERCOLOUR } from './style.js';
+import { createWatercolour } from './watercolour.js';
+import { createMusic } from './music.js';
+import { createSuitcase } from './suitcase.js';
+import { createCaption } from './controls.js';
+import { fitCamera } from './suitcase/fit.js';
+import { washBackdrop } from './suitcase/paint.js';
+
+const params = new URLSearchParams(location.search);
+const shot = params.has('shot');
+const bridge = window.cadenceMini;            // only inside Electron (electron/mini-preload.cjs)
+const W = 540, H = 620;
+document.body.classList.toggle('preview', !bridge);
+document.documentElement.style.setProperty('--w', `${W}px`);
+document.documentElement.style.setProperty('--h', `${H}px`);
+const stage = document.getElementById('stage');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: shot });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.setClearColor(0x000000, 0);
+const size = () => ({ w: stage.clientWidth || W, h: stage.clientHeight || H });
+renderer.setSize(size().w, size().h);
+stage.appendChild(renderer.domElement);
+const painter = WATERCOLOUR ? createWatercolour(renderer, { card: true }) : null;
+
+const music = createMusic();
+const suitcase = createSuitcase({ music });
+const scene = new THREE.Scene();
+scene.background = washBackdrop(540, 620);
+scene.add(suitcase.root);
+
+const camera = new THREE.PerspectiveCamera(30, size().w / size().h, 1, 120);
+function frameCamera() {
+  camera.aspect = size().w / size().h;
+  camera.updateProjectionMatrix();
+  const el = 0.7, yaw = -0.34;
+  const dir = new THREE.Vector3(Math.sin(yaw) * Math.cos(el), Math.sin(el), Math.cos(yaw) * Math.cos(el));
+  fitCamera({ camera, object: suitcase.root, points: suitcase.fitPoints(), dir, target: new THREE.Vector3(0, 1.6, 0), rect: { x0: -0.8, x1: 0.8, y0: -0.5, y1: 0.8 } });
+}
+frameCamera();
+
+const caption = createCaption({ parent: stage, variant: 'mini', onSeek: (s) => music.command('seek', s) });
+caption.show(true, true);
+
+// ---- player state ----
+let lastState = null;
+music.onState((s) => {
+  if (shot) {                                  // frozen for screenshots
+    s = { ...s, position: (Number(params.get('p')) || 0.3) * (s.duration || 200) };
+    if (params.has('paused')) s.playerState = 2;
+    if (params.has('liked')) s.like = 'LIKE';
+  }
+  lastState = s;
+  suitcase.setState(s);
+  caption.setState(s, { real: music.real });
+});
+if (!music.real && !params.has('idle') && (shot || params.has('play'))) {
+  music.shelves().then(({ shelves }) => music.play(shelves[0].items[Number(params.get('track')) || 2]));
+}
+if (params.has('hover')) suitcase.forceHover = params.get('hover');
+
+// ---- lifecycle: hidden -> open -> closing -> hidden ----
+let phase = 'hidden';
+let appear = 0;
+function applyAppear() {
+  const e = 1 - Math.pow(1 - appear, 3);
+  stage.style.opacity = String(Math.min(1, appear * 1.8));
+  stage.style.transform = `translateY(${(1 - e) * 16}px) scale(${0.94 + 0.06 * e})`;
+}
+function summon() {
+  if (phase === 'hidden') {
+    suitcase.close({ instant: true });
+    appear = 0;
+    applyAppear();
+    renderer.setAnimationLoop(loop);
+    lastT = performance.now();
+  }
+  phase = 'open';
+  suitcase.open();                              // from wherever it is: a summon while closing carries the lid back over the top
+}
+function dismiss() {
+  if (phase !== 'open') return;
+  phase = 'closing';
+  suitcase.close();
+  bridge?.closing();
+}
+function stepFrame(dt) {
+  suitcase.update(dt);
+  if (phase === 'open') appear = Math.min(1, appear + dt / 0.22);
+  else if (phase === 'closing' && !suitcase.lidMoving) appear = Math.max(0, appear - dt / 0.16);
+  applyAppear();
+  caption.setScrub(suitcase.scrubbing ? suitcase.progress : null);
+  if (phase === 'closing' && appear <= 0 && !suitcase.lidMoving) {
+    phase = 'hidden';
+    renderer.setAnimationLoop(null);
+    bridge?.closed();
+  }
+}
+const draw = (t) => (painter ? painter.render(scene, camera, t) : renderer.render(scene, camera));
+let lastT = 0;
+function loop(ms) {
+  const dt = Math.min(0.1, (ms - lastT) / 1000);
+  lastT = ms;
+  stepFrame(dt);
+  draw(ms / 1000);
+}
+
+bridge?.onOpen(summon);
+bridge?.onClose(dismiss);
+
+// ---- pointer ----
+const ndc = new THREE.Vector2();
+function toNdc(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -(((e.clientY - r.top) / r.height) * 2 - 1));
+  return ndc;
+}
+addEventListener('pointermove', (e) => {
+  toNdc(e);
+  suitcase.lean(ndc.x, -ndc.y);
+  if (suitcase.dragging) suitcase.pointerDrag(ndc, camera);
+  else suitcase.hover(ndc, camera);
+  renderer.domElement.style.cursor = suitcase.cursor();
+});
+document.addEventListener('pointerleave', () => { suitcase.hover(null); suitcase.lean(0, 0); });
+addEventListener('pointerdown', (e) => {
+  if (e.target.closest?.('.cad-tag')) return;
+  toNdc(e);
+  if (!suitcase.pointerDown(ndc, camera) && (Math.abs(ndc.x) > 0.93 || Math.abs(ndc.y) > 0.93)) dismiss();   // the margin round the card
+});
+addEventListener('pointerup', () => { suitcase.pointerUp(); renderer.domElement.style.cursor = suitcase.cursor(); });
+addEventListener('blur', () => suitcase.pointerUp());
+addEventListener('wheel', (e) => { e.preventDefault(); suitcase.wheel(e.deltaY, e.deltaMode); }, { passive: false });
+
+// ---- keys: Esc shuts it; Space, arrows, L as in the shop ----
+addEventListener('keydown', (e) => {
+  const cmd = { ' ': 'toggle', ArrowRight: 'next', ArrowLeft: 'previous', l: 'like', L: 'like' }[e.key];
+  if (e.key === 'Escape') { e.preventDefault(); dismiss(); }
+  else if (cmd) { e.preventDefault(); music.command(cmd); }
+  else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); suitcase.nudgeVolume(e.key === 'ArrowUp' ? 0.05 : -0.05); }
+});
+
+// ---- screenshots and browser preview ----
+if (shot) {
+  window.__seek = async (t) => {
+    await Promise.all([suitcase.ready(), caption.ready()]);
+    while (!lastState?.title && !params.has('idle')) await new Promise((r) => setTimeout(r, 100));   // the fake store starts
+    await new Promise((r) => setTimeout(r, 300));
+    suitcase.close({ instant: true });
+    phase = 'open';
+    for (let i = 0; i < 90; i++) suitcase.update(1 / 30);   // let the arm, spin and knob settle with the lid still shut
+    appear = t < 0 ? 1 : 0;                                  // t < 0: the card with the lid still shut, just before the flick
+    if (t >= 0) suitcase.open();
+    for (let x = 0; x < t - 1e-9;) { const dt = Math.min(1 / 60, t - x); stepFrame(dt); x += dt; }
+    applyAppear();
+    draw(t);
+    await new Promise((r) => setTimeout(r, 100));
+    draw(t);
+    return true;
+  };
+  window.__ready = true;
+} else if (!bridge) {
+  summon();                                      // plain browser: open straight away
+  addEventListener('keydown', (e) => { if (e.key === 'o') summon(); });
+}
+// where a control is on the page (client coordinates), for tests that drive the pointer
+const screenOf = (name, dx = 0, dz = 0) => {
+  const hit = suitcase.parts.hits.find((h) => h.control === name).mesh;
+  suitcase.root.updateWorldMatrix(true, true);
+  const v = new THREE.Vector3(dx, 0, dz).add(hit.position).applyMatrix4(hit.parent.matrixWorld).project(camera);
+  const r = renderer.domElement.getBoundingClientRect();
+  return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+};
+window.__mini = { suitcase, music, summon, dismiss, screenOf, step: stepFrame, get phase() { return phase; }, get appear() { return appear; } };

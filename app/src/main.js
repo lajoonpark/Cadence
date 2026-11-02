@@ -3,6 +3,8 @@ import { buildStreet } from './street.js';
 import { buildShop } from './shop.js';
 import { WATERCOLOUR } from './style.js';
 import { createWatercolour } from './watercolour.js';
+import { createSky } from './sky.js';
+import { createTimeOfDay } from './timeofday.js';
 
 const params = new URLSearchParams(location.search);
 
@@ -10,12 +12,14 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffe
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 const painter = WATERCOLOUR ? createWatercolour(renderer) : null;
 
 const scene = new THREE.Scene();
-const sky = new THREE.Color('#f4c98a');
-scene.background = sky;
+const skyColor = new THREE.Color('#f4c98a');
+scene.background = skyColor;
 scene.fog = new THREE.Fog('#f1cf9b', 18, 52);
 
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 120);
@@ -24,14 +28,26 @@ rig.add(camera);
 scene.add(rig);
 
 // Light: warm low sun for the street, soft sky fill. Interior lamps live in shop.js.
-scene.add(new THREE.HemisphereLight('#ffe7c2', '#8a6a55', 1.0));
-const sun = new THREE.DirectionalLight('#ffc27a', 1.3);
-sun.position.set(-6, 9, 14);
-scene.add(sun);
+const hemi = new THREE.HemisphereLight('#d6dcf2', '#b08a70', 1.55);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight('#ffc27a', 2.3);
+// shadows cover the whole street and the shop behind it, so the vaults keep the sun out
+sun.position.set(-20, 16, 30);
+sun.target.position.set(0, 0, -1);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 110 });
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.03;
+scene.add(sun, sun.target);
+
+const sky = createSky();
+scene.add(sky.dome);
 
 const street = buildStreet();
 scene.add(street.root);
 scene.add(buildShop());
+const timeOfDay = createTimeOfDay({ scene, sun, hemi, sky });
 
 // ---- intro timeline (seconds) ----
 const T = { hold: 0.9, push: 4.4, doorStart: 3.0, doorEnd: 4.9, enter: 7.6 };
@@ -63,8 +79,12 @@ addEventListener('pointermove', (e) => {
 const lookM = new THREE.Matrix4();
 const UP = new THREE.Vector3(0, 1, 0);
 
+// ?cam=x,y,z,tx,ty,tz pins the camera (for looking around the shop while the intro only reaches the hall)
+const pinned = params.get('cam')?.split(',').map(Number);
+
 function frame(t) {
-  const c = cameraAt(t);
+  timeOfDay.update(t);
+  const c = pinned ? { pos: new THREE.Vector3(...pinned.slice(0, 3)), target: new THREE.Vector3(...pinned.slice(3, 6)) } : cameraAt(t);
   rig.position.copy(c.pos);
   // Matrix4.lookAt uses the camera convention (looks down -z); Object3D.lookAt on a group would face the other way.
   rig.quaternion.setFromRotationMatrix(lookM.lookAt(c.pos, c.target, UP));

@@ -11,7 +11,14 @@ function addPigmentBlotches(material) {
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
-      .replace('#include <project_vertex>', '#include <project_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      .replace('#include <project_vertex>', `#include <project_vertex>
+{
+  vec4 wp = vec4(transformed, 1.0);
+  #ifdef USE_INSTANCING
+  wp = instanceMatrix * wp;
+  #endif
+  vWPos = (modelMatrix * wp).xyz;
+}`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
 varying vec3 vWPos;

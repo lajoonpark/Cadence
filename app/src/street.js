@@ -1,227 +1,395 @@
+// The outdoor scene: a narrow Tuscan alley of individual brick and stucco houses, an arch over the
+// street, opening into a little piazza in front of the Cadence record shop. Everything is real
+// geometry (bricks, tiles, shutter slats) through the instanced kit; no flat brick textures.
 import * as THREE from 'three';
-import { stoneTexture, cobbleTexture, stickerTexture } from './textures.js';
-import { toon, glow } from './materials.js';
-import { flowerBox } from './plants.js';
+import { createKit, trs, mul, BRICK } from './kit.js';
+import { brickWall, plasterWall, archBridge, flagstones, PALETTES } from './masonry.js';
+import { windowUnit, doorUnit, balcony, wallLantern, eaves, drainpipe, pottedPlant, blk, rod } from './details.js';
+import { registerLamp, glowMesh } from './env.js';
+import { scooter, bicycle, cafeSet, crate, stall, chalkboard, bench, lampPost, stringLights, washingLine, bunting } from './props.js';
+import { stickerTexture } from './textures.js';
+import { toon } from './materials.js';
+import { rng } from './rand.js';
 
-const STREET_HALF = 3.4;     // street is 6.8 wide
-const STREET_LEN = 26;       // from z=0 (shop) to z=26
+export const STREET_HALF = 3.4;
+const ALLEY = { z0: 4.6, z1: 28 };
+const PIAZZA_HALF = 5.4;
+const SHOP_W = PIAZZA_HALF * 2;
+const DOOR = { w: 2.0, h: 3.0 }; // the door leaves; an arched fanlight sits above
 
-function stoneMat(rx, ry) {
-  return toon('#ffffff', { map: stoneTexture(rx, ry) });
+const PLASTERS = ['#e9b98a', '#efd2a2', '#e3a07a', '#f0dcc0', '#d9a07a', '#ecc690', '#e8c8b0'];
+const CURTAINS = ['#f4efe4', '#f2d9c4', '#e8e2d4', null, null];
+
+const rows = (h) => Math.round(h / BRICK.row) * BRICK.row;
+const GF = rows(3.1); // top of the brick ground floor on stucco houses
+
+// Frame for a wall: origin at world point o, local x along `along`, +z along `normal`.
+function frame(o, along, normal) {
+  const x = new THREE.Vector3(...along), z = new THREE.Vector3(...normal);
+  const y = new THREE.Vector3().crossVectors(z, x);
+  return new THREE.Matrix4().makeBasis(x, y, z).setPosition(...o);
 }
 
-function lamp(x, y, z, side) {
-  const g = new THREE.Group();
-  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.05, 0.05), toon('#222'));
-  arm.position.x = side * -0.25;
-  g.add(arm);
-  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), glow('#ffd58a'));
-  bulb.position.x = side * -0.5;
-  bulb.position.y = -0.1;
-  g.add(bulb);
-  const halo = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8), new THREE.MeshBasicMaterial({ color: '#ffb54a', transparent: true, opacity: 0.22, depthWrite: false }));
-  halo.position.copy(bulb.position);
-  g.add(halo);
-  g.position.set(x, y, z);
-  return g;
-}
+// One house front. Returns meshes that are not instanced (backing slabs, glass, lamps).
+function house(kit, M, spec) {
+  const { w, seed } = spec;
+  const r = rng(seed);
+  const out = [];
+  const allBrick = spec.brick;
+  const h = rows(spec.h);
+  const pal = spec.pal ?? PALETTES.honey;
+  const color = spec.color ?? PLASTERS[Math.floor(r() * PLASTERS.length)];
+  const nf = h > 9.4 ? 3 : 2;
 
-function sideWall(side) {
-  const g = new THREE.Group();
-  const x = side * (STREET_HALF + 2);
-  const wall = new THREE.Mesh(new THREE.BoxGeometry(4, 9, STREET_LEN), stoneMat(3, 7));
-  wall.position.set(x, 4.5, STREET_LEN / 2);
-  g.add(wall);
+  // ---- ground floor ----
+  const ground = [];
+  const kind = spec.ground ?? ['shop', 'door', 'garage'][Math.floor(r() * 3)];
+  let shopO = null, doorO = null, sideWin = null;
+  if (kind === 'shop') {
+    shopO = { type: 'arch', x: w / 2, y: 0, w: Math.min(2.5, w - 1.6), h: 2.9 };
+    ground.push(shopO);
+  } else if (kind === 'garage') {
+    doorO = { type: 'arch', x: w / 2, y: 0, w: Math.min(2.4, w - 1.6), h: 2.85 };
+    ground.push(doorO);
+  } else {
+    doorO = { type: 'rect', x: w * 0.32, y: 0, w: 1.1, h: 2.3, lintel: true };
+    sideWin = { type: 'rect', x: w * 0.74, y: 1.0, w: 0.8, h: 1.1, lintel: true };
+    ground.push(doorO, sideWin);
+  }
 
-  const faceX = side * STREET_HALF;
-  // windows with shutters and flower boxes in bays along the wall
-  for (let i = 0; i < 5; i++) {
-    const z = 3.5 + i * 4.6;
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.7, 1.2), toon('#3a2a22'));
-    frame.position.set(faceX - side * 0.05, 5.1, z);
-    g.add(frame);
-    const pane = new THREE.Mesh(new THREE.BoxGeometry(0.22, 1.4, 0.9), glow(i % 2 ? '#ffcf84' : '#6e5a4c'));
-    pane.position.set(faceX - side * 0.1, 5.1, z);
-    g.add(pane);
+  // ---- upper floors ----
+  const upper = [];
+  const nwin = Math.max(1, Math.floor((w - 0.5) / 1.85));
+  const balconyFloor = spec.balcony ? 1 : 0;
+  const balconyIdx = Math.floor(nwin / 2);
+  const winFloors = [];
+  for (let f = 1; f <= nf; f++) {
+    const fy = GF + 0.12 + (f - 1) * 2.55;
+    for (let i = 0; i < nwin; i++) {
+      const x = ((i + 0.5) * w) / nwin;
+      const isBalc = f === balconyFloor && i === balconyIdx;
+      const arch = allBrick && f === 1 && !isBalc && r() < 0.5;
+      const o = isBalc
+        ? { type: 'rect', x, y: fy + 0.05, w: 0.95, h: 2.1, lintel: allBrick }
+        : arch
+          ? { type: 'arch', x, y: fy + 0.5, w: 0.85, h: 1.6, ring: 0.2 }
+          : { type: 'rect', x, y: fy + 0.5, w: 0.82, h: f === nf ? 1.25 : 1.45, lintel: allBrick };
+      upper.push(o);
+      winFloors.push({ o, f, isBalc, fy });
+    }
+  }
+
+  // ---- walls ----
+  if (allBrick) {
+    out.push(...brickWall(kit, M, { w, y1: h, openings: [...ground, ...upper], seed, pal }));
+  } else {
+    out.push(...brickWall(kit, M, { w, y1: GF, openings: ground, seed, pal }));
+    // a stone string course between the brick base and the stucco
+    blk(kit, M, w / 2, GF + 0.04, 0.05, w, 0.1, 0.12, '#e6d7bb');
+    out.push(...plasterWall(kit, M, { w, y0: GF, y1: h, openings: upper, color, seed, pal, patches: 1 + Math.floor(r() * 3) }));
+  }
+
+  // ---- fill the openings ----
+  if (shopO) {
+    // a little lit bottega behind the arch: back wall, shelves of jars, a counter
+    const R = mul(M, trs(shopO.x, 0, -1.0));
+    const back = new THREE.Mesh(new THREE.PlaneGeometry(shopO.w + 0.6, 3.2), toon('#f0c890'));
+    back.applyMatrix4(mul(R, trs(0, 1.6, -0.6)));
+    out.push(back);
     for (const s of [-1, 1]) {
-      const sh = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.6, 0.55), toon(i % 2 ? '#7a4a30' : '#5d6f52'));
-      sh.position.set(faceX - side * 0.14, 5.1, z + s * 0.9);
-      g.add(sh);
+      const side = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 3.2), toon('#e0b07a'));
+      side.applyMatrix4(mul(R, trs(s * (shopO.w / 2 + 0.05), 1.6, 0.1, 0, -s * Math.PI / 2, 0)));
+      out.push(side);
     }
-    const fb = flowerBox(40 + i + (side > 0 ? 10 : 0), 1.5);
-    fb.rotation.y = Math.PI / 2;
-    fb.position.set(faceX - side * 0.3, 4.1, z);
-    g.add(fb);
+    for (let k = 0; k < 3; k++) {
+      blk(kit, R, 0, 1.0 + k * 0.5, -0.45, shopO.w, 0.04, 0.3, '#8a5a32');
+      for (let j = 0; j < 8; j++) {
+        const c = new THREE.Color().setHSL(r(), 0.4, 0.5 + r() * 0.2);
+        kit.pot.add(mul(R, trs(-shopO.w / 2 + 0.2 + j * ((shopO.w - 0.4) / 7), 1.12 + k * 0.5, -0.45, Math.PI, 0, 0, 0.12, 0.2, 0.12)), c);
+      }
+    }
+    blk(kit, R, 0, 0.45, 0.3, shopO.w - 0.4, 0.9, 0.5, '#9a6a3c');
+    // canvas awning over the arch
+    const stripe = ['#c4673d', '#3f6e6a', '#6a86a0', '#8a9a5b'][Math.floor(r() * 4)];
+    const aw = shopO.w + 0.6;
+    for (let i = 0; i < 9; i++) blk(kit, M, shopO.x - aw / 2 + (i + 0.5) * (aw / 9), 3.35, 0.55, aw / 9, 0.03, 1.15, i % 2 ? stripe : '#f2e8d4', 0.42);
+    for (let i = 0; i < 18; i++) kit.disc.add(mul(M, trs(shopO.x - aw / 2 + (i + 0.5) * (aw / 18), 3.07, 1.08, Math.PI / 2, 0, 0, 0.13, 0.02, 0.13)), Math.floor(i / 2) % 2 ? stripe : '#f2e8d4');
+    rod(kit, M, [shopO.x - aw / 2, 3.6, 0.02], [shopO.x - aw / 2, 3.1, 1.1], 0.015, '#2b2a2e');
+    rod(kit, M, [shopO.x + aw / 2, 3.6, 0.02], [shopO.x + aw / 2, 3.1, 1.1], 0.015, '#2b2a2e');
+    // goods spilling out front
+    crate(kit, mul(M, trs(shopO.x - 0.7, 0, 0.45, 0, 0.1, 0)), 0.6, 0.45, 0.32, seed + 5, r() > 0.5 ? 'fruit' : 'lemons');
+    crate(kit, mul(M, trs(shopO.x + 0.75, 0, 0.4, 0, -0.08, 0)), 0.6, 0.45, 0.32, seed + 6, 'fruit');
   }
-
-  // ground-floor arched alcoves with warm stalls
-  for (let i = 0; i < 3; i++) {
-    const z = 5 + i * 7 + (side > 0 ? 1.5 : 0);
-    const alcove = new THREE.Mesh(new THREE.BoxGeometry(0.5, 2.4, 2.2), glow('#2a1a12'));
-    alcove.position.set(faceX + side * 0.0, 1.2, z);
-    g.add(alcove);
-    const top = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 0.5, 14, 1, false, 0, Math.PI), glow('#2a1a12'));
-    top.rotation.set(0, 0, Math.PI / 2);
-    top.rotation.order = 'YXZ';
-    top.rotation.y = Math.PI / 2;
-    top.position.set(faceX, 2.4, z);
-    g.add(top);
-    const warm = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.8, 1.7), glow(i % 2 ? '#e8a24a' : '#f2c46d'));
-    warm.position.set(faceX - side * 0.28, 1.0, z);
-    g.add(warm);
-    const crate = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 1.3), toon('#a8743a'));
-    crate.position.set(faceX - side * 0.5, 0.25, z);
-    g.add(crate);
-    const fruitColors = ['#d9552b', '#e8b23a', '#7cb356'];
-    for (let k = 0; k < 6; k++) {
-      const f = new THREE.Mesh(new THREE.SphereGeometry(0.11, 7, 6), toon(fruitColors[(i + k) % 3]));
-      f.position.set(faceX - side * 0.5 + (k % 2) * 0.2 - 0.1, 0.6, z - 0.5 + (k / 5) * 1.0);
-      g.add(f);
+  if (doorO) {
+    out.push(...doorUnit(kit, M, doorO, { color: ['#5a3d24', '#3f5e4a', '#6a4a3a', '#2f4e5a'][Math.floor(r() * 4)], seed }));
+    if (doorO.type === 'rect') {
+      pottedPlant(kit, M, doorO.x - 0.85, 0, 0.35, 0.9, seed + 3);
+      if (r() > 0.4) pottedPlant(kit, M, doorO.x + 0.85, 0, 0.35, 0.7, seed + 4, 'geranium');
     }
   }
-
-  g.add(lamp(faceX, 3.4, 9.5, side));
-  g.add(lamp(faceX, 3.4, 17.5, side));
-  g.add(lamp(faceX, 3.4, 4.2, side));
-  return g;
-}
-
-function archBridge(z) {
-  // One outline with the archway carved out of the bottom edge (no hole touching the boundary).
-  const shape = new THREE.Shape();
-  const w = STREET_HALF + 0.01, h = 9;
-  const r = w - 0.5, base = 2.4;
-  shape.moveTo(-w, 0);
-  shape.lineTo(-r, 0);
-  shape.lineTo(-r, base);
-  shape.absarc(0, base, r, Math.PI, 0, true);
-  shape.lineTo(r, 0);
-  shape.lineTo(w, 0);
-  shape.lineTo(w, h);
-  shape.lineTo(-w, h);
-  shape.closePath();
-  const geo = new THREE.ExtrudeGeometry(shape, { depth: 2.4, bevelEnabled: false });
-  const tex = stoneTexture(2, 3);
-  const m = new THREE.Mesh(geo, toon('#ffffff', { map: tex }));
-  // extrude UVs are in world units; scale them so the texture reads as blocks
-  const uv = geo.attributes.uv;
-  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 0.18, uv.getY(i) * 0.18);
-  m.position.set(0, 0, z);
-  const g = new THREE.Group();
-  g.add(m);
-  const win = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.3, 0.12), glow('#ffcf84'));
-  win.position.set(0, 7.4, z + 2.45);
-  g.add(win);
-  return g;
-}
-
-function scooter(color) {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 1.4), toon(color));
-  body.position.y = 0.65;
-  g.add(body);
-  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.14, 0.6), toon('#2a2220'));
-  seat.position.set(0, 1.05, -0.2);
-  g.add(seat);
-  const front = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.9, 0.3), toon(color));
-  front.position.set(0, 0.8, 0.65);
-  g.add(front);
-  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.07, 0.07), toon('#222'));
-  bar.position.set(0, 1.3, 0.65);
-  g.add(bar);
-  const wheelGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.16, 12);
-  const wheelMat = toon('#1c1a1c');
-  for (const z of [-0.55, 0.65]) {
-    const w = new THREE.Mesh(wheelGeo, wheelMat);
-    w.rotation.z = Math.PI / 2;
-    w.position.set(0, 0.28, z);
-    g.add(w);
+  if (sideWin) {
+    out.push(...windowUnit(kit, M, sideWin, { seed: seed + 8, sill: true, curtain: '#f4efe4' }));
+    for (let k = 0; k < 6; k++) rod(kit, M, [sideWin.x - 0.32 + k * 0.128, sideWin.y, 0.06], [sideWin.x - 0.32 + k * 0.128, sideWin.y + sideWin.h, 0.06], 0.012, '#2b2a2e');
   }
-  return g;
-}
-
-// The whole outdoor scene: cobbles, flanking walls, an arch, scooters, and a shopfront at z=0
-// with a real doorway. Returns pieces the intro animation needs.
-export function buildStreet() {
-  const root = new THREE.Group();
-
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(STREET_HALF * 2, STREET_LEN + 4), toon('#ffffff', { map: cobbleTexture(3, 14) }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.set(0, 0, STREET_LEN / 2 + 1);
-  root.add(ground);
-
-  root.add(sideWall(-1));
-  root.add(sideWall(1));
-  root.add(archBridge(11));
-  root.add(archBridge(21));
-
-  const s1 = scooter('#d1342c'); s1.position.set(-2.3, 0, 14); s1.rotation.y = 0.15; root.add(s1);
-  const s2 = scooter('#e8d6b0'); s2.position.set(2.5, 0, 7.5); s2.rotation.y = -0.2; root.add(s2);
-
-  // Shopfront wall with a doorway, spanning wider than the street so it closes the view.
-  const W = 9, H = 9, DW = 2.0, DH = 3.0;
-  const shape = new THREE.Shape();
-  shape.moveTo(-W, 0); shape.lineTo(-DW / 2, 0); shape.lineTo(-DW / 2, DH); shape.lineTo(DW / 2, DH); shape.lineTo(DW / 2, 0);
-  shape.lineTo(W, 0); shape.lineTo(W, H); shape.lineTo(-W, H); shape.closePath();
-  for (const cx of [-2.3, 2.3]) {
-    const p = new THREE.Path();
-    p.moveTo(cx - 0.9, 0.9); p.lineTo(cx + 0.9, 0.9); p.lineTo(cx + 0.9, 2.9); p.lineTo(cx - 0.9, 2.9); p.closePath();
-    shape.holes.push(p);
-  }
-  const frontGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.5, bevelEnabled: false });
-  const uv = frontGeo.attributes.uv;
-  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 0.18, uv.getY(i) * 0.18);
-  const front = new THREE.Mesh(frontGeo, toon('#ffffff', { map: stoneTexture(1, 1) }));
-  front.position.z = -0.5;
-  root.add(front);
-
-  // Warm glow behind the display windows.
-  for (const cx of [-2.3, 2.3]) {
-    const pane = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 2.0), glow('#ffd9a0'));
-    pane.position.set(cx, 1.9, -0.15);
-    pane.material.transparent = true; pane.material.opacity = 0.55;
-    root.add(pane);
+  for (const { o, f, isBalc } of winFloors) {
+    const state = ['open', 'open', 'half', 'closed'][Math.floor(r() * 4)];
+    out.push(...windowUnit(kit, M, o, {
+      seed: seed * 13 + o.x * 7 + f,
+      shutters: isBalc ? 'open' : state,
+      color: spec.shutter,
+      curtain: CURTAINS[Math.floor(r() * CURTAINS.length)],
+      frame: allBrick ? null : '#f2e6d0',
+      sill: !isBalc,
+      box: !isBalc && f === 1 && r() > 0.35 ? (r() > 0.3 ? '#d63a2f' : '#e86a8a') : null,
+    }));
+    if (isBalc) balcony(kit, M, o.x, o.y - 0.02, 1.7, { seed });
   }
 
-  // Door leaves hinged at the jambs, opening inward.
-  const leafGeo = new THREE.BoxGeometry(DW / 2 - 0.02, DH - 0.02, 0.1);
-  leafGeo.translate((DW / 2 - 0.02) / 2, 0, 0);
+  // ---- roof, pipes, lamps ----
+  eaves(kit, M, w, h, seed);
+  if (spec.pipe !== false) drainpipe(kit, M, w - 0.12, h);
+  if (spec.lantern) out.push(...wallLantern(kit, M, spec.lantern === 'left' ? 0.5 : w - 0.55, 3.45, { order: r() }));
+  // mass behind the facade so roofs and steps read against the sky
+  const mass = new THREE.Mesh(new THREE.BoxGeometry(w, h, 6), toon(allBrick ? pal.mortar : color));
+  mass.applyMatrix4(mul(M, trs(w / 2, h / 2, -3.25)));
+  mass.receiveShadow = true;
+  out.push(mass);
+  return { meshes: out, h };
+}
+
+// A row of houses along one side of the alley, from z0 to z1. side: -1 left (x<0), +1 right.
+function row(kit, root, side, z0, z1, seed) {
+  const r = rng(seed);
+  let z = z0;
+  let i = 0;
+  const widths = [];
+  while (z1 - z > 0.1) {
+    let w = 3.4 + r() * 2.6;
+    if (z1 - z - w < 3.2) w = z1 - z;
+    widths.push([z, w]);
+    z += w;
+  }
+  const houses = [];
+  for (const [zs, w] of widths) {
+    const set = (r() - 0.5) * 0.16;
+    const M = side < 0
+      ? frame([-STREET_HALF + set, 0, zs + w], [0, 0, -1], [1, 0, 0])
+      : frame([STREET_HALF - set, 0, zs], [0, 0, 1], [-1, 0, 0]);
+    const s = seed * 100 + i * 17;
+    const spec = {
+      w, seed: s,
+      h: 7.4 + r() * 3.2,
+      brick: r() < 0.4,
+      balcony: r() < 0.45,
+      lantern: i % 2 === 0 ? (r() > 0.5 ? 'left' : 'right') : null,
+      ground: ['shop', 'door', 'garage', 'door', 'shop'][Math.floor(r() * 5)],
+    };
+    const { meshes, h } = house(kit, M, spec);
+    meshes.forEach((m) => root.add(m));
+    houses.push({ zs, w, h, side });
+    i++;
+  }
+  return houses;
+}
+
+// The Cadence shop: brick ground floor with two arched display windows and an arched door,
+// stucco above with a balcony. Faces +z at z = 0.
+function shopFront(kit, root) {
+  const M = frame([-PIAZZA_HALF, 0, 0], [1, 0, 0], [0, 0, 1]);
+  const w = SHOP_W, cx = w / 2, h = rows(9.4);
+  const top = rows(4.9);
+  const pal = PALETTES.honey;
+  const door = { type: 'arch', x: cx, y: 0, w: DOOR.w, h: DOOR.h + DOOR.w / 2, ring: 0.3 };
+  const wins = [-3.0, 3.0].map((dx) => ({ type: 'arch', x: cx + dx, y: 0.55, w: 2.3, h: 3.4, ring: 0.3 }));
+  const meshes = [];
+  meshes.push(...brickWall(kit, M, { w, y1: top, openings: [door, ...wins], seed: 501, pal }));
+  blk(kit, M, cx, top + 0.05, 0.06, w, 0.12, 0.14, '#e6d7bb');
+  const upper = [-3.2, 0, 3.2].map((dx) => ({ type: 'rect', x: cx + dx, y: dx === 0 ? top + 0.15 : top + 0.6, w: dx === 0 ? 1.1 : 0.9, h: dx === 0 ? 2.15 : 1.5 }));
+  const upper2 = [-3.2, 0, 3.2].map((dx) => ({ type: 'rect', x: cx + dx, y: top + 2.9, w: 0.8, h: 1.1 }));
+  meshes.push(...plasterWall(kit, M, { w, y0: top, y1: h, openings: [...upper, ...upper2], color: '#e3a07a', seed: 502, pal, patches: 2 }));
+  upper.forEach((o, i) => meshes.push(...windowUnit(kit, M, o, { seed: 520 + i, shutters: 'open', color: '#3f6e6a', frame: '#f2e6d0', sill: i !== 1, curtain: '#f4efe4', box: i !== 1 ? '#d63a2f' : null })));
+  upper2.forEach((o, i) => meshes.push(...windowUnit(kit, M, o, { seed: 530 + i, shutters: i === 1 ? 'closed' : 'half', color: '#3f6e6a', frame: '#f2e6d0' })));
+  balcony(kit, M, cx, top + 0.13, 2.6, { seed: 540 });
+  eaves(kit, M, w, h, 503);
+  drainpipe(kit, M, 0.15, h);
+  drainpipe(kit, M, w - 0.15, h);
+
+  // the wall is deep: line the openings so you never see into the gap
+  const reveal = toon('#e0c9a0');
+  for (const o of [door, ...wins]) {
+    const r0 = o.w / 2, spring = o.y + o.h - r0;
+    const outer = new THREE.Shape();
+    outer.moveTo(o.x - r0 - 0.08, o.y - 0.05); outer.lineTo(o.x + r0 + 0.08, o.y - 0.05); outer.lineTo(o.x + r0 + 0.08, spring);
+    outer.absarc(o.x, spring, r0 + 0.08, 0, Math.PI, false); outer.closePath();
+    const hole = new THREE.Path();
+    hole.moveTo(o.x - r0, o.y); hole.lineTo(o.x + r0, o.y); hole.lineTo(o.x + r0, spring);
+    hole.absarc(o.x, spring, r0, 0, Math.PI, false); hole.closePath();
+    outer.holes.push(hole);
+    const g = new THREE.ExtrudeGeometry(outer, { depth: 0.5, bevelEnabled: false, curveSegments: 20 });
+    g.translate(0, 0, -0.55);
+    const m = new THREE.Mesh(g, reveal);
+    m.applyMatrix4(M);
+    meshes.push(m);
+  }
+
+  // display windows: glass, a ledge of records facing the street, a little hanging plant
+  for (const o of wins) {
+    const spring = o.y + o.h - o.w / 2;
+    const glassMat = new THREE.MeshBasicMaterial({ color: '#cfe0e6', transparent: true, opacity: 0.18, depthWrite: false });
+    const g1 = new THREE.Mesh(new THREE.PlaneGeometry(o.w, spring - o.y), glassMat);
+    g1.applyMatrix4(mul(M, trs(o.x, (o.y + spring) / 2, -0.25)));
+    const g2 = new THREE.Mesh(new THREE.CircleGeometry(o.w / 2, 20, 0, Math.PI), glassMat);
+    g2.applyMatrix4(mul(M, trs(o.x, spring, -0.25)));
+    meshes.push(g1, g2);
+    const wood = '#3f6e6a';
+    blk(kit, M, o.x, o.y + 0.04, -0.24, o.w, 0.08, 0.08, wood);
+    blk(kit, M, o.x, spring, -0.24, o.w, 0.06, 0.06, wood);
+    blk(kit, M, o.x, (o.y + spring) / 2, -0.24, 0.06, spring - o.y, 0.06, wood);
+    blk(kit, M, o.x, o.y + 0.02, 0.06, o.w + 0.3, 0.1, 0.32, '#e9dcc2');
+    blk(kit, M, o.x, o.y + 0.08, -0.4, o.w - 0.1, 0.06, 0.28, '#8a5a32');
+    const r = rng(o.x * 10);
+    for (let k = 0; k < 3; k++) {
+      const c = new THREE.Color().setHSL(r(), 0.45, 0.5);
+      blk(kit, M, o.x - 0.65 + k * 0.65, o.y + 0.42, -0.42, 0.55, 0.55, 0.02, c, -0.15, (k - 1) * 0.2, 0);
+      kit.disc.add(mul(M, trs(o.x - 0.65 + k * 0.65 + 0.12, o.y + 0.5, -0.45, Math.PI / 2 - 0.15, 0, 0, 0.5, 0.01, 0.5)), '#1d1b1d');
+    }
+  }
+
+  // sign board above the door, sticker lettering
+  blk(kit, M, cx, top - 0.42, 0.04, 3.6, 0.62, 0.08, '#3f6e6a');
+  const signTex = stickerTexture('CADENCE', { w: 1024, h: 256, size: 190 });
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.3, 0.82), new THREE.MeshBasicMaterial({ map: signTex, transparent: true }));
+  sign.applyMatrix4(mul(M, trs(cx, top - 0.4, 0.1, 0, 0, -0.03)));
+  meshes.push(sign);
+  // hanging blade sign: a big vinyl record on an iron bracket
+  rod(kit, M, [cx + 4.95, 3.9, 0.02], [cx + 4.95, 3.9, 1.1], 0.025, '#24211f');
+  rod(kit, M, [cx + 4.95, 3.5, 0.02], [cx + 4.95, 3.9, 0.7], 0.015, '#24211f');
+  kit.disc.add(mul(M, trs(cx + 4.95, 3.35, 0.7, 0, 0, Math.PI / 2, 0.95, 0.05, 0.95)), '#1d1b1d');
+  kit.disc.add(mul(M, trs(cx + 4.95, 3.35, 0.7, 0, 0, Math.PI / 2, 0.36, 0.06, 0.36)), '#e86a3a');
+  for (const s of [-1, 1]) {
+    meshes.push(...wallLantern(kit, M, cx + s * 1.55, 3.0, { order: 0.05 + (s > 0 ? 0.02 : 0) }));
+    pottedPlant(kit, M, cx + s * 1.55, 0, 0.5, 1.4, 560 + s, 'lemon');
+  }
+  // crates of records under the windows, chalkboard, bench, bicycle
+  for (const o of wins) {
+    const T = mul(M, trs(o.x, 0, 0.75));
+    for (const [x, z] of [[-0.75, -0.25], [0.75, -0.25], [-0.75, 0.25], [0.75, 0.25]]) rod(kit, T, [x, 0, z], [x, 0.62, z], 0.025, '#5a3d24');
+    blk(kit, T, 0, 0.64, 0, 1.75, 0.05, 0.7, '#8a5a32');
+    crate(kit, mul(T, trs(-0.43, 0.66, 0, 0, 0.04, 0)), 0.8, 0.62, 0.32, Math.round(o.x * 3), 'records');
+    crate(kit, mul(T, trs(0.43, 0.66, 0, 0, -0.05, 0)), 0.8, 0.62, 0.32, Math.round(o.x * 3) + 1, 'records');
+  }
+  chalkboard(kit, mul(M, trs(cx - 1.4, 0, 1.6, 0, 0.5, 0)));
+  bicycle(kit, mul(M, trs(cx + 4.55, 0, 0.35, 0, Math.PI / 2 + 0.15, 0)));
+
+  // door leaves, hinged at the jambs and opening inward (animated by the intro)
   const leaves = [];
+  const leafW = DOOR.w / 2 - 0.02;
   for (const s of [-1, 1]) {
     const pivot = new THREE.Group();
-    pivot.position.set(s * (DW / 2), DH / 2, -0.2);
-    const leafMesh = new THREE.Mesh(leafGeo, toon('#2f5d50'));
-    leafMesh.scale.x = -s;
-    pivot.add(leafMesh);
-    const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 1.4), glow('#ffcf84'));
-    glass.position.set(-s * 0.5, 0.35, 0.06);
-    pivot.add(glass);
-    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.3, 0.05), toon('#d8b25c'));
-    handle.position.set(-s * 0.9, -0.1, 0.1);
-    pivot.add(handle);
+    pivot.position.set(s * (DOOR.w / 2), DOOR.h / 2, -0.3);
+    const L = new THREE.Group();
+    L.scale.x = -s;
+    const wood = toon('#3f6e6a');
+    const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; L.add(m); };
+    add(new THREE.BoxGeometry(0.1, DOOR.h, 0.1), wood, 0.05, 0, 0);
+    add(new THREE.BoxGeometry(0.1, DOOR.h, 0.1), wood, leafW - 0.05, 0, 0);
+    add(new THREE.BoxGeometry(leafW, 0.12, 0.1), wood, leafW / 2, DOOR.h / 2 - 0.06, 0);
+    add(new THREE.BoxGeometry(leafW, 0.9, 0.08), wood, leafW / 2, -DOOR.h / 2 + 0.45, 0);
+    add(new THREE.BoxGeometry(leafW, 0.08, 0.1), wood, leafW / 2, -0.55, 0);
+    add(new THREE.BoxGeometry(leafW - 0.1, 2.0, 0.02), new THREE.MeshBasicMaterial({ color: '#f6dca8', transparent: true, opacity: 0.35 }), leafW / 2, 0.45, 0);
+    add(new THREE.BoxGeometry(0.035, 2.0, 0.04), wood, leafW / 2, 0.45, 0);
+    add(new THREE.BoxGeometry(0.05, 0.32, 0.06), toon('#d8b25c'), leafW - 0.14, -0.15, 0.08);
+    pivot.add(L);
     root.add(pivot);
     leaves.push({ pivot, side: s });
   }
+  // fanlight over the door
+  const fan = new THREE.Mesh(new THREE.CircleGeometry(DOOR.w / 2, 20, 0, Math.PI), new THREE.MeshBasicMaterial({ color: '#f6dca8', transparent: true, opacity: 0.4 }));
+  fan.position.set(0, DOOR.h, -0.3);
+  meshes.push(fan);
+  for (let k = 1; k < 5; k++) {
+    const a = (k / 5) * Math.PI;
+    rod(kit, new THREE.Matrix4(), [0, DOOR.h, -0.28], [Math.cos(a) * 0.98, DOOR.h + Math.sin(a) * 0.98, -0.28], 0.018, '#3f6e6a');
+  }
+  blk(kit, new THREE.Matrix4(), 0, DOOR.h + 0.03, -0.28, DOOR.w, 0.07, 0.08, '#3f6e6a');
+  blk(kit, new THREE.Matrix4(), 0, 0.06, 0.25, DOOR.w + 0.6, 0.12, 0.5, '#d8ccb6');
 
-  // Sticker-lettered sign above the door.
-  const signTex = stickerTexture('CADENCE', { w: 1024, h: 256, size: 190 });
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 1.05), new THREE.MeshBasicMaterial({ map: signTex, transparent: true }));
-  sign.position.set(0, 4.35, 0.08);
-  sign.rotation.z = -0.05;
-  root.add(sign);
-  const awning = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.12, 1.2), toon('#c4673d'));
-  awning.position.set(0, 3.5, 0.6);
-  awning.rotation.x = 0.12;
-  root.add(awning);
-  const fb = flowerBox(77, 1.6); fb.position.set(-4.4, 0.9, 0.35); root.add(fb);
-  const fb2 = flowerBox(78, 1.6); fb2.position.set(4.4, 0.9, 0.35); root.add(fb2);
-  root.add(lamp(-3.5 - 0.2, 3.7, 0.5, -1));
-  root.add(lamp(3.5 + 0.2, 3.7, 0.5, 1));
+  meshes.forEach((m) => root.add(m));
+  return leaves;
+}
 
-  // the doorway lintel / jamb trim
-  const trim = new THREE.Mesh(new THREE.BoxGeometry(DW + 0.3, 0.2, 0.6), toon('#3a2a22'));
-  trim.position.set(0, DH + 0.1, -0.2);
-  root.add(trim);
+export function buildStreet() {
+  const root = new THREE.Group();
+  const kit = createKit();
 
+  // paving: alley and piazza
+  root.add(flagstones(kit, { x0: -STREET_HALF, x1: STREET_HALF, z0: ALLEY.z0 - 0.2, z1: ALLEY.z1 + 2, seed: 11 }));
+  root.add(flagstones(kit, { x0: -PIAZZA_HALF, x1: PIAZZA_HALF, z0: -0.2, z1: ALLEY.z0, seed: 12, gutter: false, pal: PALETTES.rose }));
+
+  // houses on both sides of the alley
+  row(kit, root, -1, ALLEY.z0, ALLEY.z1, 3);
+  row(kit, root, 1, ALLEY.z0, ALLEY.z1, 4);
+
+  // piazza: side houses and the ends of the alley rows facing it
+  for (const s of [-1, 1]) {
+    const M = s < 0
+      ? frame([-PIAZZA_HALF, 0, ALLEY.z0], [0, 0, -1], [1, 0, 0])
+      : frame([PIAZZA_HALF, 0, 0], [0, 0, 1], [-1, 0, 0]);
+    const { meshes } = house(kit, M, { w: ALLEY.z0, seed: 800 + s, h: 8.8, brick: s > 0, balcony: true, ground: s < 0 ? 'shop' : 'door', lantern: 'right', pipe: false });
+    meshes.forEach((m) => root.add(m));
+    const E = s < 0
+      ? frame([-STREET_HALF, 0, ALLEY.z0], [-1, 0, 0], [0, 0, -1])
+      : frame([PIAZZA_HALF, 0, ALLEY.z0], [-1, 0, 0], [0, 0, -1]);
+    const ew = PIAZZA_HALF - STREET_HALF;
+    root.add(...brickWall(kit, E, { w: ew, y1: rows(8.8), seed: 820 + s, pal: PALETTES.honey }));
+    eaves(kit, E, ew, rows(8.8), 830 + s);
+  }
+
+  // the arch over the alley, with a lantern hanging in it
+  const archM = frame([-STREET_HALF, 0, 13.4], [1, 0, 0], [0, 0, 1]);
+  archBridge(kit, archM, { w: STREET_HALF * 2, h: 9.6, d: 2.4, archW: 5.4, archH: 5.0, seed: 41, plaster: '#efd2a2' }).forEach((m) => root.add(m));
+  rod(kit, new THREE.Matrix4(), [0, 5.05, 12.2], [0, 4.4, 12.2], 0.012, '#24211f');
+  {
+    const hang = trs(0, 4.25, 12.2);
+    kit.cone.add(mul(hang, trs(0, 0.2, 0, 0, Math.PI / 4, 0, 0.32, 0.16, 0.32)), '#24211f');
+    const gm = new THREE.MeshBasicMaterial({ color: '#5a4c40' });
+    const g = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.32, 0.17), gm);
+    g.applyMatrix4(hang);
+    root.add(g);
+    const halo = glowMesh('sprite', 1.4, 0.7);
+    halo.position.set(0, 4.25, 12.2);
+    const pool = glowMesh('plane', 4.5, 0.28);
+    pool.rotation.x = -Math.PI / 2;
+    pool.position.set(0, 0.1, 12.2);
+    pool.scale.set(4.5, 4.5, 1);
+    root.add(halo, pool);
+    registerLamp({ glass: gm, glows: [halo, pool], order: 0.3 });
+  }
+
+  // street life
+  scooter(kit, trs(2.5, 0, 15.6, 0, -0.25, 0), '#d1342c');
+  scooter(kit, trs(2.55, 0, 8.2, 0, -0.3, 0), '#e8d6b0');
+  scooter(kit, trs(2.45, 0, 22.5, 0, 2.9, 0), '#6a9ab0');
+  stall(kit, trs(-2.3, 0, 16.2, 0, Math.PI / 2, 0), 61, '#3f6e6a');
+  bench(kit, trs(2.75, 0, 18.2, 0, -Math.PI / 2, 0));
+  pottedPlant(kit, new THREE.Matrix4(), 2.85, 0, 19.4, 1.2, 70, 'lemon');
+  pottedPlant(kit, new THREE.Matrix4(), -2.95, 0, 9.4, 1.0, 71, 'bush');
+  pottedPlant(kit, new THREE.Matrix4(), -2.95, 0, 14.2, 0.9, 72, 'geranium');
+  cafeSet(kit, trs(-3.9, 0, 2.7, 0, 0.3, 0), 81, '#c4673d');
+  cafeSet(kit, trs(-3.6, 0, 0.9 + 0.6, 0, -0.4, 0), 82, null);
+  bench(kit, trs(4.6, 0, 3.0, 0, -Math.PI / 2, 0));
+  root.add(...lampPost(kit, trs(-4.7, 0, 4.1), 0.1));
+  root.add(...lampPost(kit, trs(4.7, 0, 4.1), 0.12));
+
+  // things strung across the street
+  root.add(stringLights(kit, [-STREET_HALF, 4.6, 3.2], [STREET_HALF + 1.8, 4.4, 0.05], { orderBase: 0.15 }));
+  root.add(stringLights(kit, [-PIAZZA_HALF, 4.3, 1.0], [PIAZZA_HALF, 4.5, 3.6], { orderBase: 0.18, n: 18 }));
+  washingLine(kit, [-STREET_HALF, 6.7, 8.0], [STREET_HALF, 6.9, 7.3], 5);
+  washingLine(kit, [-STREET_HALF, 7.2, 17.2], [STREET_HALF, 7.0, 17.9], 6);
+  bunting(kit, [-STREET_HALF, 5.6, 9.6], [STREET_HALF, 5.8, 9.9], 7);
+  bunting(kit, [-STREET_HALF, 5.8, 15.5], [STREET_HALF, 5.6, 15.1], 8);
+
+  const leaves = shopFront(kit, root);
+  kit.flush(root);
   return { root, leaves };
 }

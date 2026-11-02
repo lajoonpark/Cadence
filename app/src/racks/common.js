@@ -469,6 +469,48 @@ function createPlayTracker() {
   };
 }
 
+// ---- screen keep-out ---------------------------------------------------------------------------
+
+// A box on screen (CSS px, e.g. the suitcase and its caption) that lifted records must not float
+// under. main.js sets it once: setScreenAvoid(() => rect | null).
+let avoidFn = null;
+export function setScreenAvoid(fn) { avoidFn = fn; }
+
+const _bb = new THREE.Box3(), _c = new THREE.Vector3(), _wp = new THREE.Vector3(), _right = new THREE.Vector3(), _up = new THREE.Vector3();
+const AVOID_MARGIN = 14;
+// Slide a lifted sleeve (with its tag) right until it clears the box.
+// Stateless: layout() poses the sleeve from scratch every frame, this only adds an offset on top.
+function keepClear(s, camera) {
+  const rect = avoidFn?.();
+  if (!rect || !rect.width || s.lift < 0.01) return;
+  const W = innerWidth, H = innerHeight;
+  s.mesh.updateWorldMatrix(true, true);
+  _bb.setFromObject(s.mesh);
+  if (_bb.isEmpty()) return;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let k = 0; k < 8; k++) {
+    _c.set(k & 1 ? _bb.max.x : _bb.min.x, k & 2 ? _bb.max.y : _bb.min.y, k & 4 ? _bb.max.z : _bb.min.z).project(camera);
+    if (_c.z > 1) return; // behind the camera: leave it
+    const px = (_c.x + 1) / 2 * W, py = (1 - _c.y) / 2 * H;
+    x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+  }
+  const m = AVOID_MARGIN;
+  if (x1 < rect.left - m || x0 > rect.right + m || y1 < rect.top - m || y0 > rect.bottom + m) return;
+  // slide it right, toward the middle of the picture (pushing it up runs into the side menu)
+  const px = rect.right + m - x0, py = 0;
+  // pixels -> metres at the sleeve's depth
+  s.mesh.getWorldPosition(_wp);
+  const depth = _c.copy(_wp).applyMatrix4(camera.matrixWorldInverse).z * -1;
+  if (depth <= 0) return;
+  const perPx = (2 * depth * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) / H;
+  const L = s.lift, e = L * L * (3 - 2 * L);
+  _right.setFromMatrixColumn(camera.matrixWorld, 0);
+  _up.setFromMatrixColumn(camera.matrixWorld, 1);
+  _wp.addScaledVector(_right, px * perPx * e).addScaledVector(_up, py * perPx * e);
+  s.mesh.parent.worldToLocal(_wp);
+  s.mesh.position.copy(_wp);
+}
+
 // ---- rack core ----------------------------------------------------------------------------------
 
 export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_ITEMS, sleeve = {}, tagOnSleeve = true } = {}) {
@@ -541,9 +583,10 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
           s.step(dt, i === want);
         });
         root.updateWorldMatrix(true, false);
-        core.camLocal.copy(camera.position);
+        camera.getWorldPosition(core.camLocal); // world: the camera may sit in a rig (main.js)
         root.worldToLocal(core.camLocal);
         def.layout(core, dt, camera, want);
+        if (active) for (const s of core.sleeves) if (s.lift > 0.01) keepClear(s, camera);
         core.sleeves.forEach((s) => { s.mesh.visible = s.appear > 0 && !s.hidden; });
         if (core.tag.mesh.parent) core.tag.mesh.scale.setScalar(0.6 + 0.4 * (core.sleeves[want]?.lift ?? 0));
       },

@@ -123,7 +123,7 @@ export function createSpinnerRack({ onPick }) {
       vel += (target - vel) * smooth(5, dt);
       car.rotation.y += vel * dt;
       car.updateWorldMatrix(true, false);
-      cam.copy(camera.position);
+      camera.getWorldPosition(cam);
       car.worldToLocal(cam);
       viewForward(fw, camera, car);
       c.sleeves.forEach((s) => {

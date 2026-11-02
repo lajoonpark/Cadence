@@ -6,6 +6,7 @@ import { createWatercolour, renderOverlay } from './watercolour.js';
 import { createSky } from './sky.js';
 import { createTimeOfDay } from './timeofday.js';
 import { createRack } from './racks/index.js';
+import { setScreenAvoid } from './racks/common.js';
 import { STATIONS, HOME, assignShelves } from './stations.js';
 import { createNav, AT_HOME } from './nav.js';
 import { createMenu } from './menu.js';
@@ -111,6 +112,8 @@ function ensureRack(i) {
 
 // the suitcase record player in the bottom-left corner (drawn in an overlay pass, subscribes to the player state itself)
 const suitcase = createPlayer({ renderer, painter, music, camera });
+// a hovered record never floats up underneath the suitcase or its caption
+setScreenAvoid(() => suitcase.avoidRect());
 const menu = createMenu({
   onGo: (i) => nav.go(i),
   onHome: () => nav.go(AT_HOME),

@@ -16,6 +16,16 @@ function chromeUserAgent() {
   return app.userAgentFallback.replace(/\s(Electron|cadence-app|Cadence)\/\S+/gi, '');
 }
 
+// Google blocks sign-in from embedded Chromium ("This browser or app may not be secure") but still
+// accepts Firefox, so the sign-in window (only) presents itself as Firefox: Firefox user agent, no
+// Client Hints headers, no navigator.userAgentData. Lajoon chose this on 2026-11-02, knowing it
+// works around Google's embedded-browser check; the official alternative is OAuth in the system
+// browser, which cannot give the web player a signed-in session.
+const FIREFOX_UA = {
+  darwin: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:140.0) Gecko/20100101 Firefox/140.0',
+  win32: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0',
+}[process.platform] ?? 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0';
+
 function createYtm({ onState, onSignedIn }) {
   const ua = chromeUserAgent();
   const win = new BrowserWindow({
@@ -92,13 +102,23 @@ function createYtm({ onState, onSignedIn }) {
     lastSignedIn = s.signedIn;
   }, 250);
 
-  // Google sign-in in a normal visible window that shares the player's cookies.
+  // Google sign-in in a visible window that shares the player's cookies.
+  const signInIds = new Set();
+  win.webContents.session.webRequest.onBeforeSendHeaders((d, cb) => {
+    if (signInIds.has(d.webContentsId)) {
+      for (const k of Object.keys(d.requestHeaders)) if (/^sec-ch-ua/i.test(k)) delete d.requestHeaders[k];
+    }
+    cb({ requestHeaders: d.requestHeaders });
+  });
   function signIn(parent) {
     const w = new BrowserWindow({
       width: 480, height: 720, parent, modal: false, title: 'Sign in to YouTube Music',
-      webPreferences: { partition: PARTITION },
+      webPreferences: { partition: PARTITION, preload: path.join(__dirname, 'signin-preload.cjs') },
     });
-    w.webContents.setUserAgent(ua);
+    const id = w.webContents.id;
+    signInIds.add(id);
+    w.on('closed', () => signInIds.delete(id));
+    w.webContents.setUserAgent(FIREFOX_UA);
     w.loadURL(`https://accounts.google.com/ServiceLogin?service=youtube&continue=${encodeURIComponent(HOME)}`);
     w.webContents.on('did-navigate', (_e, url) => {
       if (url.startsWith(HOME)) {

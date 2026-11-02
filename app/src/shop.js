@@ -36,6 +36,18 @@ export const ZONES = [
   { id: 'courtyard', at: [0, 1.7, -27.5] },
 ];
 
+// Furniture that a station's rack replaces lives in its own group: the shop keeps it when no shelf
+// is assigned to the station, and main hides it (root.userData.stationFurniture[id].visible = false)
+// when a rack stands there.
+let STATION_FURNITURE = null;
+function stationFurniture(id, build) {
+  const kit = createKit();
+  build(kit);
+  const g = new THREE.Group();
+  kit.flush(g);
+  STATION_FURNITURE[id] = g;
+}
+
 function frame(o, along, normal) {
   const x = new THREE.Vector3(...along), z = new THREE.Vector3(...normal);
   const y = new THREE.Vector3().crossVectors(z, x);
@@ -159,7 +171,14 @@ function gallery(kit, out) {
   trailingIvy(kit, frame([inner, y + 0.95, back], [0, 0, 1], [-1, 0, 0]), 0.2, front - back - 0.2, 0, 82);
   trailingIvy(kit, frame([-inner, y + 0.95, back], [1, 0, 0], [0, 0, 1]), 0.2, inner * 2 - 0.2, 0, 83);
   // shelves up on the gallery, low enough for the vault
-  recordShelf(kit, frame([-X + 0.3, y + 0.03, -6.3], [0, 0, -1], [1, 0, 0]), { w: 6.2, h: 1.35, levels: 3, seed: 91 });
+  // the middle of the left wing (z -4.6..-7.4) is the floor-lean rack's; its stand-in shelf lives
+  // in a station group, the dressing at both ends stays either way
+  stationFurniture('gallery', (k) => recordShelf(k, frame([-X + 0.3, y + 0.03, -6.0], [0, 0, -1], [1, 0, 0]), { w: 2.8, h: 1.35, levels: 3, seed: 91 }));
+  recordShelf(kit, frame([-X + 0.3, y + 0.03, -8.55], [0, 0, -1], [1, 0, 0]), { w: 1.4, h: 0.95, levels: 2, seed: 93 });
+  crateOfRecords(kit, trs(-X + 0.5, y + 0.03, -3.95, 0, Math.PI / 2, 0), 0.7, 0.5, 94);
+  crateOfRecords(kit, trs(-X + 0.5, y + 0.33, -3.95, 0, Math.PI / 2 + 0.08, 0), 0.7, 0.5, 96);
+  pottedPlant(kit, I, -X + 0.35, y + 0.03, -3.3, 1.4, 97, 'geranium');
+  pottedPlant(kit, I, -X + 0.35, y + 0.03, -9.45, 1.2, 98, 'bush');
   recordShelf(kit, frame([X - 0.3, y + 0.03, -6.3], [0, 0, 1], [-1, 0, 0]), { w: 6.2, h: 1.35, levels: 3, seed: 92 });
   armchair(kit, frame([-4.6, y + 0.03, -9.9], [1, 0, 0], [0, 0, 1]), '#3f6e6a');
   out.push(floorLamp(kit, frame([-3.9, y + 0.03, -10.1], [1, 0, 0], [0, 0, 1])));
@@ -172,6 +191,8 @@ function gallery(kit, out) {
 
 export function buildShop() {
   const root = new THREE.Group();
+  STATION_FURNITURE = {};
+  root.userData.stationFurniture = STATION_FURNITURE;
   const kit = createKit();
   const out = [];
   const I = new THREE.Matrix4();
@@ -275,7 +296,7 @@ export function buildShop() {
   for (const z of [-4.4, -7.1]) for (const s of [-1, 1]) binTable(kit, trs(s * 2.05, 0, z, 0, Math.PI / 2, 0), Math.round(z * 10) + s);
   // under the gallery: shelves left, listening corner and shelves right, counter at the back
   recordShelf(kit, frame([-HALL.x + 0.25, 0, -6.3], [0, 0, -1], [1, 0, 0]), { w: 6.2, h: 2.65, levels: 6, seed: 101 });
-  recordShelf(kit, frame([HALL.x - 0.25, 0, -6.9], [0, 0, 1], [-1, 0, 0]), { w: 4.2, h: 2.65, levels: 6, seed: 102 });
+  stationFurniture('cubby', (k) => recordShelf(k, frame([HALL.x - 0.25, 0, -6.9], [0, 0, 1], [-1, 0, 0]), { w: 4.2, h: 2.65, levels: 6, seed: 102 }));
   armchair(kit, frame([4.5, 0, -3.6], [0, 0, 1], [-1, 0, 0]), '#b84a3a');
   turntable(kit, frame([4.6, 0, -2.6], [0, 0, 1], [-1, 0, 0]));
   out.push(floorLamp(kit, trs(5.0, 0, -4.4)));
@@ -285,10 +306,12 @@ export function buildShop() {
     blk(kit, C, 1.45, 0.5, 0, 2.9, 1.0, 0.7, '#7a5634');
     for (let i = 0; i < 9; i++) blk(kit, C, 0.15 + i * 0.33, 0.5, 0.36, 0.02, 0.9, 0.02, '#5a3d24');
     blk(kit, C, 1.45, 1.04, 0.02, 3.0, 0.08, 0.8, '#d8c8aa');
-    blk(kit, C, 2.4, 1.2, 0, 0.42, 0.26, 0.34, '#c4673d'); // till
-    blk(kit, C, 2.4, 1.36, -0.06, 0.38, 0.1, 0.2, '#e9e1d0', 0.4);
-    turntable(kit, mul(C, trs(1.0, 1.08, 0)), { cabinet: false });
-    pottedPlant(kit, C, 0.25, 1.08, 0, 0.6, 111, 'bush');
+    // the middle of the counter (x 3.35..4.65) is the easel's: till at the left end, plant and
+    // turntable at the right
+    blk(kit, C, 0.4, 1.2, -0.05, 0.42, 0.26, 0.34, '#c4673d'); // till
+    blk(kit, C, 0.4, 1.36, -0.11, 0.38, 0.1, 0.2, '#e9e1d0', 0.4);
+    turntable(kit, mul(C, trs(2.55, 1.08, 0)), { cabinet: false });
+    pottedPlant(kit, C, 0.95, 1.08, -0.1, 0.6, 111, 'bush');
     crateOfRecords(kit, mul(C, trs(1.6, 0, 0.75, 0, 0.1, 0)), 0.7, 0.55, 112);
   }
   floorTree(kit, trs(-4.6, 0, -9.7), 2.4, 121);
@@ -313,14 +336,16 @@ export function buildShop() {
     blk(kit, I, -1.2, 0.2, zc, 0.6, 0.4, 1.0, '#7a5634');
     turntable(kit, trs(-1.2, 0.35, zc, 0, Math.PI / 2, 0), { cabinet: false });
     out.push(floorLamp(kit, trs(-2.8, 0, v.z0 - 0.5)));
-    // record wall: sleeves faced out in a grid
-    const W = frame([VX - 0.05, 0, v.z1 + 0.4], [0, 0, 1], [-1, 0, 0]);
-    const r = rng(141);
-    for (let row = 0; row < 4; row++) for (let col = 0; col < 7; col++) {
-      const c = new THREE.Color().setHSL(r(), 0.35 + r() * 0.4, 0.35 + r() * 0.35);
-      blk(kit, W, 0.4 + col * 0.46, 0.75 + row * 0.5, 0.03, 0.34, 0.34, 0.02, c);
-      if (r() < 0.5) kit.disc.add(mul(W, trs(0.4 + col * 0.46, 0.75 + row * 0.5, 0.045, Math.PI / 2, 0, 0, 0.12, 0.004, 0.12)), new THREE.Color().setHSL(r(), 0.5, 0.6));
-    }
+    // record wall: sleeves faced out in a grid (the wall rack replaces it)
+    stationFurniture('lounge', (k) => {
+      const W = frame([VX - 0.05, 0, v.z1 + 0.4], [0, 0, 1], [-1, 0, 0]);
+      const r = rng(141);
+      for (let row = 0; row < 4; row++) for (let col = 0; col < 7; col++) {
+        const c = new THREE.Color().setHSL(r(), 0.35 + r() * 0.4, 0.35 + r() * 0.35);
+        blk(k, W, 0.4 + col * 0.46, 0.75 + row * 0.5, 0.03, 0.34, 0.34, 0.02, c);
+        if (r() < 0.5) k.disc.add(mul(W, trs(0.4 + col * 0.46, 0.75 + row * 0.5, 0.045, Math.PI / 2, 0, 0, 0.12, 0.004, 0.12)), new THREE.Color().setHSL(r(), 0.5, 0.6));
+      }
+    });
     speaker(kit, frame([VX - 0.3, 0, v.z0 - 0.35], [0, 0, 1], [-1, 0, 0]));
     speaker(kit, frame([VX - 0.3, 0, v.z1 + 0.25], [0, 0, 1], [-1, 0, 0]));
     hangingPlant(kit, trs(1.6, VSPRING + Math.sqrt(VX ** 2 - 1.6 ** 2), zc - 0.8), 1.6, 145);
@@ -332,12 +357,15 @@ export function buildShop() {
     const v = VAULTS[1];
     const zc = (v.z0 + v.z1) / 2;
     recordShelf(kit, frame([-VX + 0.22, 0, zc], [0, 0, -1], [1, 0, 0]), { w: 3.8, h: 2.95, levels: 7, seed: 151 });
-    recordShelf(kit, frame([VX - 0.22, 0, zc], [0, 0, 1], [-1, 0, 0]), { w: 3.8, h: 2.95, levels: 7, seed: 152 });
-    ladder(kit, frame([VX - 0.5, 0, zc + 0.6], [0, 0, 1], [-1, 0, 0]).multiply(trs(0, 0, 0)), 3.0);
-    rod(kit, I, [VX - 0.42, 2.98, v.z0 - 0.1], [VX - 0.42, 2.98, v.z1 + 0.1], 0.015, '#c9a85a');
+    // right-hand shelf, ladder, brass rail and the two crates in front: the tall rack replaces them
+    stationFurniture('stacks', (k) => {
+      recordShelf(k, frame([VX - 0.22, 0, zc], [0, 0, 1], [-1, 0, 0]), { w: 3.8, h: 2.95, levels: 7, seed: 152 });
+      ladder(k, frame([VX - 0.5, 0, zc + 0.6], [0, 0, 1], [-1, 0, 0]), 3.0);
+      rod(k, I, [VX - 0.42, 2.98, v.z0 - 0.1], [VX - 0.42, 2.98, v.z1 + 0.1], 0.015, '#c9a85a');
+      crateOfRecords(k, trs(VX - 1.0, 0, v.z1 + 0.6, 0, 0.3, 0), 0.6, 0.5, 165);
+      crateOfRecords(k, trs(VX - 1.0, 0.3, v.z1 + 0.62, 0, 0.2, 0), 0.6, 0.5, 166);
+    });
     for (let k = 0; k < 4; k++) crateOfRecords(kit, trs(-VX + 0.75, 0, v.z0 - 0.5 - k * 0.9, 0, Math.PI / 2 + (k % 2) * 0.1, 0), 0.6, 0.5, 160 + k);
-    crateOfRecords(kit, trs(VX - 1.0, 0, v.z1 + 0.6, 0, 0.3, 0), 0.6, 0.5, 165);
-    crateOfRecords(kit, trs(VX - 1.0, 0.3, v.z1 + 0.62, 0, 0.2, 0), 0.6, 0.5, 166);
     out.push(...pendant(kit, trs(0, 0, zc), VSPRING + VX - 0.1, 2.3, { shade: '#e8b23a' }));
   }
 
@@ -372,7 +400,8 @@ export function buildShop() {
     const zc = (COURT.z0 + COURT.z1) / 2;
     pottedPlant(kit, I, 0, 0, zc - 0.6, 2.6, 201, 'lemon');
     cafeSet(kit, trs(-2.8, 0, zc + 0.6, 0, 0.4, 0), 202, null);
-    for (let k = 0; k < 3; k++) crateOfRecords(kit, trs(2.9, 0.75 * 0 + k * 0.3, zc + 1.0, 0, 0.1 * k - 0.1, 0), 0.7, 0.55, 203 + k);
+    // the crate stack the market-crates rack replaces
+    stationFurniture('courtyard', (k) => { for (let q = 0; q < 3; q++) crateOfRecords(k, trs(2.9, q * 0.3, zc + 1.0, 0, 0.1 * q - 0.1, 0), 0.7, 0.55, 203 + q); });
     pottedPlant(kit, I, 3.6, 0, COURT.z1 + 0.6, 1.4, 206, 'geranium');
     pottedPlant(kit, I, -3.7, 0, COURT.z1 + 0.6, 1.6, 207, 'bush');
     root.add(stringLights(kit, [-COURT.x, 4.4, COURT.z0 - 0.3], [COURT.x, 4.4, COURT.z1 + 0.5], { orderBase: 0.2, n: 16 }));
@@ -381,5 +410,6 @@ export function buildShop() {
 
   kit.flush(root);
   out.forEach((m) => root.add(m));
+  Object.values(STATION_FURNITURE).forEach((g) => root.add(g));
   return root;
 }

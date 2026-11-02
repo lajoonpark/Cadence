@@ -11,12 +11,13 @@ const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=sw
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('console', (m) => console.log('[page]', m.text()));
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
-await page.goto('http://127.0.0.1:5199/?shot');
+const query = process.env.CADENCE_QUERY ? `&${process.env.CADENCE_QUERY}` : '';
+await page.goto(`http://127.0.0.1:5199/?shot${query}`);
 await page.waitForFunction('window.__ready === true', null, { timeout: 60000 });
 for (const t of (times.length ? times : ['0', '3', '5', '8'])) {
   await page.evaluate((s) => window.__seek(s), Number(t));
   const file = `${outDir}/t${t}.png`;
-  await page.screenshot({ path: file });
+  await page.screenshot({ path: file, timeout: 180000 });
   console.log('wrote', file);
 }
 await browser.close();

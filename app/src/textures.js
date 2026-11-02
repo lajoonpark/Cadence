@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { rng } from './rand.js';
+import { WATERCOLOUR } from './style.js';
+import { washStone, washCobble, washPlank, washConcrete } from './paint.js';
 
 function canvas(w, h) {
   const c = document.createElement('canvas');
@@ -18,6 +20,7 @@ function finish(c, repeatX = 1, repeatY = 1) {
 
 // Soft, hand-painted honey-coloured stone blocks.
 export function stoneTexture(repeatX, repeatY) {
+  if (WATERCOLOUR) return washStone(repeatX, repeatY);
   const [c, g] = canvas(512, 512);
   const r = rng(7);
   g.fillStyle = '#b98f5e'; g.fillRect(0, 0, 512, 512);
@@ -41,6 +44,7 @@ export function stoneTexture(repeatX, repeatY) {
 
 // Rounded flagstones for the street.
 export function cobbleTexture(repeatX, repeatY) {
+  if (WATERCOLOUR) return washCobble(repeatX, repeatY);
   const [c, g] = canvas(512, 512);
   const r = rng(11);
   g.fillStyle = '#4f4a52'; g.fillRect(0, 0, 512, 512);
@@ -59,6 +63,7 @@ export function cobbleTexture(repeatX, repeatY) {
 }
 
 export function plankTexture(repeatX, repeatY, horizontal = false) {
+  if (WATERCOLOUR) return washPlank(repeatX, repeatY, horizontal);
   const [c, g] = canvas(512, 512);
   const r = rng(23);
   const n = 8;
@@ -84,6 +89,7 @@ export function plankTexture(repeatX, repeatY, horizontal = false) {
 }
 
 export function concreteTexture(repeatX, repeatY) {
+  if (WATERCOLOUR) return washConcrete(repeatX, repeatY);
   const [c, g] = canvas(256, 256);
   const r = rng(5);
   g.fillStyle = '#8c8680'; g.fillRect(0, 0, 256, 256);
@@ -116,9 +122,9 @@ export function stickerTexture(text, { w = 1024, h = 256, size = 170, color = '#
 }
 
 // Stepped gradient so lights read as flat bands (non-photoreal look).
-export function toonGradient(steps = 4) {
+export function toonGradient(steps = 4, floor = 70) {
   const data = new Uint8Array(steps);
-  for (let i = 0; i < steps; i++) data[i] = Math.round(70 + (185 * i) / (steps - 1));
+  for (let i = 0; i < steps; i++) data[i] = Math.round(floor + ((255 - floor) * i) / (steps - 1));
   const t = new THREE.DataTexture(data, steps, 1, THREE.RedFormat);
   t.minFilter = t.magFilter = THREE.NearestFilter;
   t.needsUpdate = true;

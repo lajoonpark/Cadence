@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { buildStreet } from './street.js';
 import { buildShop } from './shop.js';
+import { WATERCOLOUR } from './style.js';
+import { createWatercolour } from './watercolour.js';
 
 const params = new URLSearchParams(location.search);
 
@@ -9,6 +11,7 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
+const painter = WATERCOLOUR ? createWatercolour(renderer) : null;
 
 const scene = new THREE.Scene();
 const sky = new THREE.Color('#f4c98a');
@@ -72,11 +75,13 @@ function frame(t) {
   const k = 0.25 + 0.75 * settled; // gentle tilt outside, full tilt inside
   camera.rotation.order = 'YXZ';
   camera.rotation.set(-tilt.y * 0.09 * k, -tilt.x * 0.2 * k, 0);
-  renderer.render(scene, camera);
+  if (painter) painter.render(scene, camera, t);
+  else renderer.render(scene, camera);
 }
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
+  painter?.setSize();
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 });

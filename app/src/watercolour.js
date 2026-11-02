@@ -94,6 +94,12 @@ void main() {
   // low-frequency blooms (uneven wash density) in screen space, very gentle
   col *= mix(0.95, 1.04, fbm(q * 2.2 + 3.0));
 
+  // crisp things (album art, labels) wrote alpha 0: show them as rendered, barely touched by paper
+  float crisp = clamp(1.0 - texture2D(tScene, vUv).a, 0.0, 1.0);
+  vec3 clean = sceneAt(vUv);
+  clean *= 0.97 + 0.03 * h;
+  col = mix(col, clean, crisp);
+
   // 6. unpainted ragged border, like a painting that stops short of the sheet edge
   vec2 e = min(vUv, 1.0 - vUv) * vec2(aspect, 1.0);
   float border = min(e.x, e.y) + (fbm(q * 9.0 + seed * 0.3) - 0.5) * 0.05;

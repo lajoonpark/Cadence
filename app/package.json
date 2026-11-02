@@ -11,9 +11,12 @@
     "web": "vite",
     "build": "vite build",
     "electron": "electron .",
-    "shot": "node scripts/shot.mjs"
+    "shot": "node scripts/shot.mjs",
+    "test": "node --test test/*.test.cjs",
+    "e2e": "node scripts/e2e-electron.mjs"
   },
   "dependencies": {
+    "@fontsource/caveat-brush": "^5.3.0",
     "three": "^0.187.0"
   },
   "devDependencies": {

@@ -1,0 +1,115 @@
+// Music backend for the shop. In the Electron app this is YouTube Music (window.cadence, from
+// electron/preload.cjs). In a plain browser (`npm run web`, screenshots) it is a fake record
+// store with painted covers, so the rack and buttons can be worked on without an account.
+import { rng } from './rand.js';
+
+export function createMusic() {
+  return window.cadence ? realMusic(window.cadence) : fakeMusic();
+}
+
+function realMusic(c) {
+  return {
+    real: true,
+    shelves: (next) => c.home(next), // -> { shelves, next }
+    play: (item) => c.play(item.play),
+    command: (name, arg) => c.command(name, arg),
+    signIn: () => c.signIn(),
+    onState: (cb) => c.onState(cb),
+    onSignedIn: (cb) => c.onSignedIn(cb),
+  };
+}
+
+// ---- fake store ------------------------------------------------------------
+
+const WORDS = ['Lemon', 'Terracotta', 'Slow', 'Piazza', 'Night', 'Garden', 'Velvet', 'Paper', 'Moon', 'Harbour', 'Sunday', 'Copper', 'Linen', 'Swallow', 'Olive', 'Blue', 'Marble', 'Ember', 'Quiet', 'Fig'];
+const NOUNS = ['Hours', 'Waltz', 'Lights', 'Tapes', 'Rooms', 'Weather', 'Songs', 'Echoes', 'Letters', 'Balcony', 'Static', 'Gold', 'Bloom', 'Tide'];
+const ARTISTS = ['Mira Sol', 'The Arches', 'Lio & Bea', 'Casa Verde', 'Northbound', 'Ottavia', 'Paper Kites Club', 'Juno Hale', 'Sienna Lane', 'Old Lanterns'];
+const SHELVES = ['Listen again', 'Quick picks', 'Forgotten favourites', 'Mixed for you', 'Golden hour'];
+
+// A painted-looking square cover: a wash background with a few bold shapes and a title.
+function fakeCover(seed, title) {
+  const r = rng(seed);
+  const S = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  const hue = Math.floor(r() * 360);
+  const grad = g.createLinearGradient(0, 0, S * r(), S);
+  grad.addColorStop(0, `hsl(${hue} ${40 + r() * 40}% ${45 + r() * 30}%)`);
+  grad.addColorStop(1, `hsl(${(hue + 40 + r() * 80) % 360} ${40 + r() * 40}% ${25 + r() * 35}%)`);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, S, S);
+  for (let i = 0; i < 3 + r() * 4; i++) {
+    g.fillStyle = `hsla(${(hue + 150 + r() * 120) % 360} ${50 + r() * 40}% ${50 + r() * 40}% / ${0.5 + r() * 0.5})`;
+    g.beginPath();
+    if (r() < 0.5) g.arc(r() * S, r() * S, 20 + r() * 70, 0, Math.PI * 2);
+    else g.rect(r() * S, r() * S, 30 + r() * 120, 10 + r() * 60);
+    g.fill();
+  }
+  g.fillStyle = 'rgba(255,255,255,.92)';
+  g.font = '700 26px Georgia, serif';
+  g.fillText(title.toUpperCase(), 16, S - 22, S - 32);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+
+function fakeShelves() {
+  const r = rng(7);
+  let n = 0;
+  return SHELVES.map((title, s) => ({
+    title,
+    items: Array.from({ length: 14 + Math.floor(r() * 9) }, () => {
+      const t = `${WORDS[Math.floor(r() * WORDS.length)]} ${NOUNS[Math.floor(r() * NOUNS.length)]}`;
+      const id = `fake${s}_${n++}`;
+      return {
+        kind: 'song',
+        title: t,
+        subtitle: ARTISTS[Math.floor(r() * ARTISTS.length)],
+        art: fakeCover(n * 13 + 1, t),
+        play: { videoId: id },
+        duration: 150 + Math.floor(r() * 120),
+      };
+    }),
+  }));
+}
+
+function fakeMusic() {
+  const shelves = fakeShelves();
+  const all = shelves.flatMap((s) => s.items);
+  const listeners = [];
+  const st = { signedIn: true, ready: true, videoId: null, title: null, artist: null, art: null, playerState: -1, position: 0, duration: 0, volume: 70, muted: false, like: 'INDIFFERENT', adPlaying: false };
+  let queue = [];
+  let at = 0;
+  const load = (i) => {
+    at = (i + queue.length) % queue.length;
+    const it = queue[at];
+    Object.assign(st, { videoId: it.play.videoId, title: it.title, artist: it.subtitle, art: it.art, duration: it.duration, position: 0, playerState: 1, like: 'INDIFFERENT' });
+  };
+  setInterval(() => {
+    if (st.playerState === 1) {
+      st.position += 0.25;
+      if (st.position >= st.duration) load(at + 1);
+    }
+    for (const cb of listeners) cb({ ...st });
+  }, 250);
+  const commands = {
+    toggle: () => { if (st.videoId) st.playerState = st.playerState === 1 ? 2 : 1; },
+    next: () => queue.length && load(at + 1),
+    previous: () => queue.length && (st.position > 3 ? (st.position = 0) : load(at - 1)),
+    seek: (s) => { st.position = Math.max(0, Math.min(st.duration, s)); },
+    volume: (v) => { st.volume = Math.max(0, Math.min(100, v)); },
+    like: () => { st.like = st.like === 'LIKE' ? 'INDIFFERENT' : 'LIKE'; },
+  };
+  return {
+    real: false,
+    shelves: async () => ({ shelves, next: null }),
+    play: async (item) => {
+      const shelf = shelves.find((s) => s.items.includes(item));
+      queue = shelf ? shelf.items : all;
+      load(queue.indexOf(item));
+    },
+    command: async (name, arg) => commands[name]?.(arg),
+    signIn: async () => {},
+    onState: (cb) => listeners.push(cb),
+    onSignedIn: () => {},
+  };
+}

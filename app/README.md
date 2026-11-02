@@ -25,4 +25,34 @@ CADENCE_QUERY='cam=-4.4,4.65,-3.3,2,3.2,-9.5' node scripts/shot.mjs out_dir 9   
 
 URL options: `?hour=20.5` freezes the clock, `?speed=600` runs it faster, `?cam=x,y,z,tx,ty,tz` pins the camera, and `?style=flat` shows the old look.
 
-Next: sticker-lettered category words and camera moves to the racks, then real YT Music data and playback.
+## Music (YouTube Music)
+
+A hidden `music.youtube.com` window plays the audio (`electron/ytm.cjs`). YouTube Music itself does
+the queue, radio, ads, history and likes; Cadence drives it through a small script injected into the
+page (`electron/ytm-page.js`) and reads your home shelves from the same internal API the page uses
+(`electron/ytm-parse.cjs`, unit tested against a real response in `test/fixtures/home.json`). The
+shop talks to it only through `window.cadence` (`electron/preload.cjs`).
+
+- **Sign in** once with the SIGN IN button (a Google window that shares the player's cookies, kept in
+  the `persist:ytm` partition). Without signing in it works as a guest, with ads and generic shelves.
+- **The rack** (`src/rack.js`): after the intro the camera steps up to a long record rack in the hall.
+  Slide the cursor along it and the record under it lifts out, turns to face you, the vinyl slides up
+  and a paper tag shows the name and artist. Click to play it (with YouTube Music's radio after it).
+  The playing record stays raised a little. **Tab** / **Shift+Tab** flips to the next shelf for now
+  (the floating category words will replace this).
+- **Buttons** (`src/controls.js`): PLAY/PAUSE, SKIP, BACK, LIKE stacked bottom-left as paper words in
+  indigo brush strokes, turned in toward the middle and tilting with the cursor. Above them a paper
+  tag shows what is playing, with a progress line you can click to seek.
+- **Keys**: Space play/pause, ← → back/skip, ↑ ↓ or scroll for volume, L like.
+- Covers and tags are drawn sharp: they write alpha 0 into the scene buffer (`crisp()` in
+  `materials.js`) and the watercolour pass leaves those pixels alone.
+- In a plain browser (`npm run web`, screenshots) `src/music.js` fakes a record store with painted
+  covers, so the rack can be worked on without Electron or an account. `?hover=N` holds record N up.
+
+```
+npm test                                   # parser tests
+npm run build && xvfb-run -a npm run e2e -- out_dir   # real app vs YouTube Music: shelves, hover, play, buttons
+```
+
+Not yet: search, the floating category words that pick a shelf, playlists/albums open as a rack of
+their own songs (clicking one plays the whole thing for now), media keys.

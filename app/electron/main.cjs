@@ -34,8 +34,10 @@ function createWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') },
   });
   const dev = process.env.CADENCE_DEV_URL;
-  if (dev) win.loadURL(dev);
-  else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+  // CADENCE_QUERY='wc=3&hour=17' passes page options (look strength, time of day...) to the window
+  const query = process.env.CADENCE_QUERY || '';
+  if (dev) win.loadURL(query ? `${dev}${dev.includes('?') ? '&' : '?'}${query}` : dev);
+  else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), query ? { search: query } : {});
   win.on('closed', () => {
     win = null;
     // The hidden player keeps the app alive, so quit explicitly where closing the window means quit.

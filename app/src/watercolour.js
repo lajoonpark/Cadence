@@ -47,7 +47,7 @@ uniform vec2 texel;   // full-res texel
 varying vec2 vUv;
 ${NOISE}
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
-vec3 at(vec2 uv) { return toSRGB(clamp(texture2D(tScene, uv).rgb, 0.0, 1.0)); }
+vec3 at(vec2 uv) { return texture2D(tScene, uv).rgb; } // already sRGB (prep pass)
 void main() {
   vec3 m[4]; vec3 s[4];
   for (int k = 0; k < 4; k++) { m[k] = vec3(0.0); s[k] = vec3(0.0); }
@@ -73,6 +73,18 @@ void main() {
 }
 `;
 
+// Pass 0: the scene, converted to sRGB once and box-downsampled to the wash size, so the Kuwahara
+// pass (up to 196 taps a pixel) neither converts every tap nor runs on every Retina pixel.
+const prepShader = /* glsl */ `
+uniform sampler2D tScene;
+varying vec2 vUv;
+vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
+void main() {
+  vec4 c = texture2D(tScene, vUv);
+  gl_FragColor = vec4(toSRGB(clamp(c.rgb, 0.0, 1.0)), c.a);
+}
+`;
+
 // Pass 2: bleed. Only in patches (a noise mask), so some shapes stay crisp and others run. Colour is smeared along a slowly wandering flow field that is glued to
 // the paper (so it does not swim over the scene), over a distance that itself varies, and darker,
 // denser pigment carries further into light areas than the other way round, like wet-in-wet.
@@ -84,7 +96,7 @@ uniform float seed;
 varying vec2 vUv;
 ${NOISE}
 void main() {
-  vec2 pq = gl_FragCoord.xy / 512.0 + paperOffset;
+  vec2 pq = gl_FragCoord.xy * FRAG / 512.0 + paperOffset;
   float ang = fbm(pq * 1.1) * 12.566 + (fbm(pq * 3.0 + seed * 0.02) - 0.5) * 0.6;
   vec2 dir = vec2(cos(ang), sin(ang));
   vec2 side = vec2(-dir.y, dir.x);
@@ -92,7 +104,7 @@ void main() {
   vec4 c0 = texture2D(tWash, vUv);
   float l0 = lum(c0.rgb);
   vec3 acc = c0.rgb; float wsum = 1.0;
-  float jit = hash(gl_FragCoord.xy + seed) - 0.5;
+  float jit = hash(floor(gl_FragCoord.xy * FRAG) + seed) - 0.5;
   for (int i = 1; i <= 6; i++) {
     float t = (float(i) + jit * 0.8) / 6.0;
     float g = exp(-t * t * 2.2);
@@ -294,7 +306,8 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   const target = new THREE.WebGLRenderTarget(size.x, size.y, {
     type: THREE.HalfFloatType,
-    samples: 4,
+    // hi-dpi pixels are small enough that 2x MSAA reads the same under the paint, at half the memory traffic
+    samples: renderer.getPixelRatio() >= 2 ? 2 : 4,
     depthTexture: new THREE.DepthTexture(size.x, size.y),
   });
 
@@ -339,8 +352,13 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
     wash?.dispose();
     wash = null;
     if (!L) return;
-    const full = () => new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType });
-    const washT = full(), bleedT = full();
+    // The washes are soft by nature, so on a hi-dpi screen they are painted at CSS-pixel size and
+    // upscaled; radius and bleed shrink to match, so a wash covers the same area as before.
+    const scale = washScale();
+    const radius = Math.max(1, Math.round(L.radius * scale));
+    const ws = washSize(renderer.getDrawingBufferSize(new THREE.Vector2()), scale);
+    const rt = () => new THREE.WebGLRenderTarget(ws.x, ws.y, { type: THREE.HalfFloatType });
+    const prepT = rt(), washT = rt(), bleedT = rt();
     const pass = (fragmentShader, defines, uniforms) => {
       const m = new THREE.ShaderMaterial({ vertexShader, fragmentShader, defines, uniforms, depthTest: false, depthWrite: false });
       const sc = new THREE.Scene();
@@ -349,30 +367,35 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
       sc.add(q);
       return { m, sc };
     };
-    const washP = pass(washShader, { RADIUS: L.radius }, { tScene: { value: target.texture }, texel: { value: new THREE.Vector2() } });
-    const bleedP = pass(bleedShader, { BLEED: L.bleed.toFixed(1), BLEED_MIX: L.bleedMix.toFixed(2) }, {
+    const prepP = pass(prepShader, {}, { tScene: { value: target.texture } });
+    const washP = pass(washShader, { RADIUS: radius }, { tScene: { value: prepT.texture }, texel: { value: new THREE.Vector2() } });
+    const bleedP = pass(bleedShader, { BLEED: (L.bleed * scale).toFixed(2), BLEED_MIX: L.bleedMix.toFixed(2), FRAG: (1 / scale).toFixed(4) }, {
       tWash: { value: washT.texture }, texel: { value: new THREE.Vector2() },
       paperOffset: material.uniforms.paperOffset, seed: material.uniforms.seed,
     });
     material.uniforms.tWash.value = bleedT.texture;
     wash = {
-      render() {
-        renderer.setRenderTarget(washT); renderer.render(washP.sc, postCam);
-        renderer.setRenderTarget(bleedT); renderer.render(bleedP.sc, postCam);
+      scale,
+      steps: [[prepT, prepP], [washT, washP], [bleedT, bleedP]],
+      render(sync) {
+        for (const [t, p] of this.steps) { renderer.setRenderTarget(t); renderer.render(p.sc, postCam); sync?.(t === prepT ? 'prep' : t === washT ? 'wash' : 'bleed'); }
       },
-      setSize(s) {
-        washT.setSize(s.x, s.y);
-        bleedT.setSize(s.x, s.y);
+      setSize(full) {
+        const s = washSize(full, scale);
+        for (const t of [prepT, washT, bleedT]) t.setSize(s.x, s.y);
         washP.m.uniforms.texel.value.set(1 / s.x, 1 / s.y);
         bleedP.m.uniforms.texel.value.set(1 / s.x, 1 / s.y);
       },
       dispose() {
-        washT.dispose(); bleedT.dispose();
-        for (const p of [washP, bleedP]) { p.m.dispose(); p.sc.children[0].geometry.dispose(); }
+        prepT.dispose(); washT.dispose(); bleedT.dispose();
+        for (const p of [prepP, washP, bleedP]) { p.m.dispose(); p.sc.children[0].geometry.dispose(); }
       },
     };
     wash.setSize(renderer.getDrawingBufferSize(new THREE.Vector2()));
   }
+  // drawing-buffer px per CSS px, inverted: 0.5 on a Retina screen, 1 elsewhere
+  function washScale() { return Math.min(1, 1 / Math.max(1, renderer.getPixelRatio())); }
+  function washSize(full, scale) { return new THREE.Vector2(Math.max(1, Math.round(full.x * scale)), Math.max(1, Math.round(full.y * scale))); }
   buildWash();
 
   function setLevel(n) {
@@ -386,7 +409,8 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
   return {
     // overlay = { scene, camera }: drawn into the same target after the world, depth cleared, so it is
     // painted by the same pass but never hidden by (or clipped into) the walls.
-    render(scene, camera, t, overlay) {
+    // sync (profiling only): called after each step with its name, to time it (see __cadenceDebug.profile)
+    render(scene, camera, t, overlay, sync) {
       const u = material.uniforms;
       u.seed.value = (Math.floor(t * BOIL_FPS) % 64) * 1.37;
       u.near.value = camera.near;
@@ -403,15 +427,18 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
       renderer.setRenderTarget(target);
       renderer.render(scene, camera);
       renderOverlay(renderer, overlay);
-      wash?.render();
+      sync?.('scene');
+      wash?.render(sync);
       renderer.setRenderTarget(null);
       renderer.render(post, postCam);
+      sync?.('final');
     },
     setSize() {
       const s = renderer.getDrawingBufferSize(new THREE.Vector2());
       target.setSize(s.x, s.y);
       material.uniforms.resolution.value.copy(s);
-      wash?.setSize(s);
+      // a new pixel ratio (window moved to another screen) changes the wash scale: rebuild
+      if (wash && wash.scale !== washScale()) buildWash(); else wash?.setSize(s);
     },
     setLevel,
     get level() { return level; },

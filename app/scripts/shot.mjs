@@ -13,7 +13,8 @@ await server.listen();
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 // CADENCE_VIEWPORT=1024x640 shoots at another window size (default 1280x720)
 const [vw, vh] = (process.env.CADENCE_VIEWPORT || '1280x720').split('x').map(Number);
-const page = await browser.newPage({ viewport: { width: vw, height: vh } });
+// CADENCE_DPR=2 shoots like a Retina screen
+const page = await browser.newPage({ viewport: { width: vw, height: vh }, deviceScaleFactor: Number(process.env.CADENCE_DPR) || 1 });
 page.on('console', (m) => console.log('[page]', m.text()));
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 const query = process.env.CADENCE_QUERY ? `&${process.env.CADENCE_QUERY}` : '';

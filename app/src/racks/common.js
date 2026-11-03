@@ -109,7 +109,8 @@ export function getCover(url, size = 256) {
     e.loaded = new Promise((res) => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
-      img.onload = () => {
+      img.onload = async () => {
+        try { await img.decode(); } catch { /* decoded on draw instead */ } // off the main thread
         const s = Math.min(img.width, img.height);
         g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
         paintCover(g, size, coverSeed(url));
@@ -122,6 +123,28 @@ export function getCover(url, size = 256) {
     });
   }
   return e;
+}
+
+// ---- big covers, ahead of time ----
+// Hovering a sleeve swaps in its 512 px cover. Made on the spot, that is a download, a painted
+// canvas and a texture upload in the very frame the record lifts and the camera starts to turn, so
+// the racks you are heading to get theirs made in idle time, one per idle slot, and uploaded early.
+const warmQueue = [];
+let warmBusy = false;
+const idle = (fn) => (typeof requestIdleCallback === 'function' ? requestIdleCallback(fn, { timeout: 500 }) : setTimeout(fn, 30));
+function pumpWarm() {
+  if (warmBusy || !warmQueue.length) return;
+  warmBusy = true;
+  idle(() => {
+    const { art, upload } = warmQueue.shift();
+    const e = getCover(art, 512);
+    e.loaded.then(() => { upload?.(e.tex); }).finally(() => { warmBusy = false; pumpWarm(); });
+  });
+}
+export function prewarmCovers(arts, upload) {
+  const fresh = arts.filter((a) => a && !covers.has(`512|${a}`) && !warmQueue.some((q) => q.art === a));
+  warmQueue.push(...fresh.slice(0, BIG_KEEP).map((art) => ({ art, upload })));
+  pumpWarm();
 }
 
 // ---- vinyl --------------------------------------------------------------------------------------
@@ -672,6 +695,8 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         return true;
       },
       set forceHover(i) { forced = Number.isFinite(i) ? i : null; },
+      // make this rack's hover covers now (in idle time); upload(tex) puts each on the GPU early
+      prewarm(upload) { prewarmCovers(core.sleeves.map((s) => s.art), upload); },
       setPlaying(videoId) { core.play.set(videoId); },
       setShelfCount() {}, // old main.js hook (the sign no longer shows tab hints)
       ready: () => Promise.all([fontReady, core.sign?.ready, ...core.waitFor.map((x) => x.ready), core.tag.ready, ...core.sleeves.map((s) => s.small.loaded), ...core.sleeves.map((s) => s.hot && s.big?.loaded)]),

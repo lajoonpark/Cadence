@@ -20,12 +20,17 @@ import '@fontsource/caveat-brush';
 const params = new URLSearchParams(location.search);
 const shotMode = params.has('shot');
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: shotMode });
+// painted: the scene is antialiased in its own target, the screen only gets a full-screen quad
+const renderer = new THREE.WebGLRenderer({ antialias: !WATERCOLOUR, preserveDrawingBuffer: shotMode });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// The sun's 4096 px shadow map is a second full render of the scene. It is redrawn only when
+// something that casts it changes: the sun moves, the door opens, records lift at a rack (see updateShadows).
+renderer.shadowMap.autoUpdate = false;
+renderer.shadowMap.needsUpdate = true;
 document.body.appendChild(renderer.domElement);
 const painter = WATERCOLOUR ? createWatercolour(renderer) : null;
 
@@ -141,7 +146,9 @@ const menu = createMenu({
   // the suitcase and its caption sit bottom-left; the left menu stays above them
   getAvoid: () => suitcase.avoidRect(),
 });
-nav.onChange(() => menu.setCurrent(nav.at));
+// heading to a rack: make its hover covers while the camera flies (see prewarm in racks/common.js)
+function warm() { if (nav.at !== AT_HOME) racks[nav.at]?.prewarm((tex) => renderer.initTexture(tex)); }
+nav.onChange(() => { menu.setCurrent(nav.at); warm(); });
 menu.setCurrent(nav.at);
 // the search bar (Option+Cmd+S / Ctrl+Alt+S) must exist before the key handlers below are registered
 // a search pick has no sleeve: the disc machine pops up by the suitcase and spits the record out
@@ -163,17 +170,40 @@ const shelfKey = (sh) => `${sh.title}\n${sh.items.length}\n${sh.items.slice(0, 4
 let shelves = [];
 let shelvesLoaded = false;
 
+// ---- shadow map refresh (renderer.shadowMap.autoUpdate is off) ----
+// Every frame while the door swings or records move (hover lift, pick, a shelf dropping in), at
+// SHADOW_HZ; otherwise only when the sun has moved a little (it creeps with the real clock).
+const SHADOW_HZ = 20;
+let shadowBusyUntil = 0, shadowLastAt = -1, shadowDoor = -1, shadowHover = -2;
+const shadowSun = new THREE.Vector3(), shadowSunOn = { v: null };
+const shadowsBusy = (sec = 1.2) => { shadowBusyUntil = Math.max(shadowBusyUntil, curT + sec); };
+function updateShadows(t) {
+  const door = nav.doorOpen(t), hov = currentRack()?.hovered ?? -1;
+  if (door !== shadowDoor) { shadowDoor = door; shadowsBusy(0.2); }
+  if (hov !== shadowHover) { shadowHover = hov; shadowsBusy(); }
+  const sunMoved = sun.position.distanceToSquared(shadowSun) > 0.05 * 0.05 || sun.castShadow !== shadowSunOn.v;
+  const due = t < shadowBusyUntil && t - shadowLastAt >= 1 / SHADOW_HZ;
+  if (sunMoved || due || shadowLastAt < 0) {
+    renderer.shadowMap.needsUpdate = true;
+    shadowLastAt = t;
+    shadowSun.copy(sun.position); shadowSunOn.v = sun.castShadow;
+  }
+}
+
 function fill(i, shelf) {
   const key = shelfKey(shelf);
   if (placed.get(i)?.key === key) return;
   const rack = ensureRack(i);
   rack.setShelf(shelf);
   rack.root.visible = true;
+  shadowsBusy(2); // the records drop in
+  if (i === nav.at) warm();
   placed.set(i, { key, title: shelf.title });
   if (furniture[STATIONS[i].id]) furniture[STATIONS[i].id].visible = false;
 }
 function clearStation(i) {
   if (racks[i]) racks[i].root.visible = false;
+  shadowsBusy(0.2);
   if (furniture[STATIONS[i].id]) furniture[STATIONS[i].id].visible = true;
   placed.delete(i);
 }
@@ -257,6 +287,32 @@ music.onSignedIn(loadShelves);
 
 // for tests and the devtools console
 window.__cadenceDebug = {
+  renderer,
+  // ms per render step, GPU work included (each step waits for the GPU); shadows: also redraw the shadow map
+  profile({ shadows = false, runs = 3 } = {}) {
+    const gl = renderer.getContext(), px = new Uint8Array(4);
+    const out = {};
+    for (let r = 0; r < runs; r++) {
+      let last = performance.now();
+      const sync = (name) => {
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        const now = performance.now();
+        (out[name] ??= []).push(now - last);
+        last = now;
+      };
+      if (shadows) renderer.shadowMap.needsUpdate = true;
+      sync('start');
+      const t0 = last;
+      if (painter) painter.render(scene, camera, curT, suitcase.overlay, sync);
+      else renderer.render(scene, camera);
+      sync('end');
+      (out.total ??= []).push(performance.now() - t0);
+    }
+    delete out.start; delete out.end;
+    const res = { calls: renderer.info.render.calls, tris: renderer.info.render.triangles };
+    for (const [k, v] of Object.entries(out)) res[k] = +Math.min(...v).toFixed(1);
+    return res;
+  },
   get shelves() { return shelves; },
   get player() { return player; },
   get rack() { return racks[nav.at >= 0 ? nav.at : 0] ?? racks.find(Boolean); }, // the rack you are at
@@ -300,7 +356,7 @@ const pointerPx = { x: 0, y: 0 };
 // when you leave the records), the hover is frozen until the cursor actually moves. Otherwise the turn
 // slides a different record under a still cursor, the camera turns to that one, and so on.
 // The aim is taken once per record (where it sits when the turn starts), not chased every frame.
-const FOCUS = { dwell: 0.3, rest: 0.15, share: 0.5, maxYaw: 0.2, maxPitch: 0.12, rate: 2.6, release: 0.8, unfreezePx: 4 };
+const FOCUS = { dwell: 0.12, rest: 0.08, share: 0.5, maxYaw: 0.2, maxPitch: 0.12, rate: 5, release: 0.8, unfreezePx: 4 };
 const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, key: -1, aimed: -1, rack: -1, on: 0, off: 0, freeze: null };
 const _fp = new THREE.Vector3();
 function aimAt(yaw, pitch, key) {
@@ -344,7 +400,7 @@ const currentShiftRack = () => (pinnedPose ? racks[nav.at === AT_HOME ? 0 : nav.
 const currentRack = () => (nav.settled && nav.at !== AT_HOME ? racks[nav.at] : null);
 // any click during the intro skips to home
 addEventListener('pointerdown', () => { if (nav.intro) nav.skipIntro(curT); });
-renderer.domElement.addEventListener('click', () => { if (!nav.intro) currentRack()?.click(); });
+renderer.domElement.addEventListener('click', () => { if (!nav.intro) { shadowsBusy(1.5); currentRack()?.click(); } });
 
 // ---- keys ----
 // Space play/pause, arrows back/skip and volume, L like, Tab / Shift+Tab next / previous section,
@@ -467,6 +523,7 @@ function frame(t, dtOverride, draw = true) {
   // at a station (or flying to one) the side words step back so the racks stay reachable
   menu.update(dt, cursorX01, !pinnedPose && nav.at !== AT_HOME);
   if (!draw) return;
+  updateShadows(t);
   if (painter) painter.render(scene, camera, t, suitcase.overlay);
   else { renderer.render(scene, camera); renderOverlay(renderer, suitcase.overlay); }
 }

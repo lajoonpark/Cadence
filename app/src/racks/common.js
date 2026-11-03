@@ -38,6 +38,7 @@
 //   fontReady  Promise (brush font loaded).  smooth(rate, dt), easeOut(t), clamp01.
 // ---------------------------------------------------------------------------------------------
 import * as THREE from 'three';
+import { paintCover, coverSeed } from '../coverpaint.js';
 import { toon, crisp } from '../materials.js';
 import { rng } from '../rand.js';
 import { brushStroke, INK, PAPER } from '../controls.js';
@@ -111,6 +112,7 @@ export function getCover(url, size = 256) {
       img.onload = () => {
         const s = Math.min(img.width, img.height);
         g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+        paintCover(g, size, coverSeed(url));
         tex.needsUpdate = true;
         if (size <= 256) { try { e.color = averageColor(img); } catch { /* tainted canvas: keep the default spine */ } }
         res();
@@ -513,6 +515,28 @@ function keepClear(s, camera) {
 
 // ---- rack core ----------------------------------------------------------------------------------
 
+const _hc = new THREE.Raycaster(), _hb = new THREE.Box3();
+// The hovered sleeve, if it is well lifted and the cursor is over it as it is now. Racks can list
+// more sleeves that count as held up (core.held, e.g. a fan of three): the nearest one under the cursor wins.
+function heldUnder(core, pointer, camera) {
+  const held = core.held ?? (core.hovered >= 0 ? [core.hovered] : []);
+  if (!held.length) return -1;
+  _hc.setFromCamera(pointer, camera);
+  let best = -1, bestD = Infinity;
+  for (const i of held) {
+    const s = core.sleeves[i];
+    if (!s || !s.mesh.visible) continue;
+    if ((s.held ?? s.lift) < 0.5) continue;
+    s.mesh.updateWorldMatrix(true, true);
+    _hb.setFromObject(s.mesh);
+    const hit = _hc.ray.intersectBox(_hb, _wp);
+    if (!hit) continue;
+    const d = hit.distanceToSquared(_hc.ray.origin);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
 export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_ITEMS, sleeve = {}, tagOnSleeve = true } = {}) {
   const root = new THREE.Group();
   const core = {
@@ -573,7 +597,12 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         const n = core.sleeves.length;
         let want = -1;
         if (forced !== null) want = forced < n ? forced : -1;
-        else if (active && pointer && n) want = def.pick ? def.pick(core, pointer, camera) : core.picker.pick(pointer, camera, root);
+        else if (active && pointer && n) {
+          // the record already held up wins while the cursor is on it, wherever it has moved to
+          // (lifted toward you, slid clear of the suitcase): you click the song, not the rack behind it
+          want = heldUnder(core, pointer, camera);
+          if (want < 0) want = def.pick ? def.pick(core, pointer, camera) : core.picker.pick(pointer, camera, root);
+        }
         // picks >= 1000 are controls of the rack itself (page arrows...): def.control(core, id) on click
         core.control = want >= 1000 ? want - 1000 : -1;
         if (want >= 1000) want = -1;
@@ -608,6 +637,13 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         return true;
       },
       get hovered() { return core.hovered; },
+      // where the hovered record is now (world), for the camera to turn toward; false if none
+      focusPoint(out) {
+        const s = core.sleeves[core.hovered];
+        if (!s) return false;
+        s.mesh.getWorldPosition(out);
+        return true;
+      },
       set forceHover(i) { forced = Number.isFinite(i) ? i : null; },
       setPlaying(videoId) { core.play.set(videoId); },
       setShelfCount() {}, // old main.js hook (the sign no longer shows tab hints)

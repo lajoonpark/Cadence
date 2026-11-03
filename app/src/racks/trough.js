@@ -1,6 +1,7 @@
 // Station 0, the crate-digging table in the hall: sleeves stand in a long trough leaning in a row
-// with their spines to you; slide the cursor along it and the one under it lifts out, turns to face
-// you and shows its cover and a paper tag with the name. Click to play it.
+// with their spines to you; slide the cursor along it and the one under it lifts out with a neighbour
+// each side, fanned like a hand of cards, all three facing you. The one under the cursor wears the
+// paper tag with the name. Click to play it.
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, addBox, WOOD, SLEEVE, THICK, smooth } from './common.js';
@@ -11,6 +12,7 @@ const LEN = 2.1;               // trough length
 const BASE = TABLE_H + 0.03;   // sleeves stand on the trough floor
 const REST_YAW = 1.3;          // mostly edge-on, a sliver of cover showing
 const LIFT = 0.3, FORWARD = 0.22, TILT_BACK = -0.26;
+const FAN = 3, FAN_GAP = 0.27; // records up at once, and how far apart they stand
 
 function buildTable(g) {
   const { dark: wood, top, light: trough } = WOOD;
@@ -28,6 +30,7 @@ function buildTable(g) {
 export function createTroughRack({ onPick }) {
   const core = createRackCore({ onPick, sign: { w: 1.2, h: 0.15 } });
   const rest = new THREE.Matrix4();
+  let fan = -1;          // the record the fan of three is built around (-1: none up)
 
   return core.contract({
     setup(c) {
@@ -54,20 +57,47 @@ export function createTroughRack({ onPick }) {
       });
     },
 
+    // Three up at once: the record under the cursor comes up with one neighbour each side, fanned out
+    // like a hand of cards, so each is a big target. The fan stays put while the cursor is on any of
+    // its three (the one under it is the hovered one, with the tag); it moves only when the cursor goes
+    // back down to the row.
+    pick(c, pointer, camera) {
+      const i = c.picker.pick(pointer, camera, c.root);
+      fan = i >= 0 ? i : -1;
+      return i;
+    },
+
     layout(c, dt, camera, hovered) {
+      const n = c.sleeves.length;
       const kPush = smooth(10, dt);
+      if (hovered < 0) fan = -1;            // cursor off the rack (or the rack not active)
+      else if (fan < 0 || fan >= n) fan = hovered; // held by ?hover= for screenshots
+      // the fan: three neighbours around the anchor, kept inside the row
+      const first = fan < 0 ? -1 : Math.max(0, Math.min(n - FAN, fan - 1));
+      const centre = first < 0 ? -1 : first + (Math.min(FAN, n) - 1) / 2;
+      const members = [];
+      if (first >= 0) for (let k = 0; k < Math.min(FAN, n); k++) members.push(first + k);
+      c.held = members;
+      const fanX = first < 0 ? 0 : members.reduce((a, j) => a + c.sleeves[j].x, 0) / members.length;
       c.sleeves.forEach((s, i) => {
-        const d = hovered < 0 ? 0 : i - hovered;
-        // neighbours lean away to make room, fading out over a few slots
-        const push = d === 0 || hovered < 0 ? 0 : Math.sign(d) * 0.065 * Math.max(0, 1 - (Math.abs(d) - 1) / 4);
+        const inFan = members.includes(i);
+        s.fanA = (s.fanA ?? 0) + ((inFan ? 1 : 0) - (s.fanA ?? 0)) * kPush;
+        s.held = s.fanA;
+        const k = inFan ? i - centre : 0;
+        if (inFan) s.slot = k;
+        const slot = s.slot ?? 0;
+        // the rest of the row leans away from the fan to make room, fading out over a few slots
+        const d = centre < 0 || inFan ? 0 : i - centre;
+        const push = d === 0 ? 0 : Math.sign(d) * 0.085 * Math.max(0, 1 - (Math.abs(d) - 2) / 4);
         s.pushed = (s.pushed ?? 0) + (push - (s.pushed ?? 0)) * kPush;
-        const L = s.lift, m = s.mesh;
+        const F = s.fanA, L = s.lift, m = s.mesh;
+        const fx = fanX + slot * FAN_GAP;                 // where it stands in the fan
         m.position.set(
-          s.x + s.pushed,
-          BASE + SLEEVE / 2 + LIFT * L + 0.045 * s.peek + 0.06 * Math.sin(s.bump * Math.PI) + s.drop * 0.7,
-          -0.02 + FORWARD * L,
+          (s.x + s.pushed) * (1 - F) + fx * F,
+          BASE + SLEEVE / 2 + LIFT * F * (1 - 0.12 * Math.abs(slot)) + 0.04 * L + 0.045 * s.peek + 0.06 * Math.sin(s.bump * Math.PI) + s.drop * 0.7,
+          -0.02 + FORWARD * F + 0.05 * L - 0.03 * Math.abs(slot) * F,
         );
-        m.rotation.set(TILT_BACK * L, s.yaw * (1 - L), s.roll * (1 - L) - s.pushed * 1.6);
+        m.rotation.set(TILT_BACK * F, s.yaw * (1 - F) - slot * 0.12 * F, s.roll * (1 - F) - s.pushed * 1.6 - slot * 0.09 * F);
       });
     },
   });

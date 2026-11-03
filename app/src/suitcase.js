@@ -16,6 +16,7 @@
 //
 // Controls: previous, playPause, next, like (buttons), knob, record (drag to seek).
 import * as THREE from 'three';
+import { paintCover, coverSeed } from './coverpaint.js';
 import { LAYOUT as L, COMMANDS, isButton, armAngleForProgress, parkedArmAngle } from './tonearm.js';
 import { LidHinge, DEFAULT_STOP } from './lid.js';
 import { VolumeKnob } from './knob.js';
@@ -50,6 +51,7 @@ export function coverFromUrl(url) {
     img.onload = () => {
       const s = Math.min(img.width, img.height);
       g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 512, 512);
+      paintCover(g, 512, coverSeed(url));
       t.needsUpdate = true;
       res(true);
     };
@@ -410,7 +412,8 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
 
   // Scroll over the case = volume. deltaMode as in WheelEvent: 0 pixels, 1 lines.
   function wheel(deltaY, deltaMode = 0) {
-    const notches = deltaMode === 1 ? -deltaY : -deltaY / 100;   // up = louder, a wheel notch is 100 px
+    // fingers moving down (deltaY < 0 with macOS natural scrolling) = quieter, as in the shop; a notch is 100 px
+    const notches = deltaMode === 1 ? deltaY : deltaY / 100;
     knob.adjust(VolumeKnob.volumeChange(notches, { precise: false }));
     lastVolumeChange = now();
     sendVolume();

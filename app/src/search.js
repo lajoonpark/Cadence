@@ -14,6 +14,7 @@
 import { rng } from './rand.js';
 import { FONT } from './style.js';
 import { INK, PAPER, brushStroke } from './controls.js';
+import { paintedCoverURL } from './coverpaint.js';
 
 const HOT = '#b4503a';           // terracotta on the chosen slip
 const DEBOUNCE = 250;
@@ -152,8 +153,8 @@ export function createSearch({ music, onPlay }) {
         img.alt = '';
         img.decoding = 'async';
         img.onerror = () => { cover.innerHTML = '<i></i>'; };
-        img.src = item.art;
-        cover.appendChild(img);
+        cover.innerHTML = '<i></i>'; // blank paper until the painted copy is ready
+        paintedCoverURL(item.art).then((src) => { img.src = src; cover.replaceChildren(img); });
       } else cover.innerHTML = '<i></i>';
       slip.querySelector('.cs-t').textContent = item.title;
       slip.querySelector('.cs-a').textContent = [item.subtitle, item.album && item.album !== item.title ? item.album : ''].filter(Boolean).join(' · ');

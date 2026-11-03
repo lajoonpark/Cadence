@@ -8,7 +8,7 @@ import { windowUnit, doorUnit, balcony, wallLantern, eaves, drainpipe, pottedPla
 import { registerLamp, glowMesh } from './env.js';
 import { scooter, bicycle, cafeSet, crate, stall, chalkboard, bench, lampPost, stringLights, washingLine, bunting } from './props.js';
 import { stickerTexture } from './textures.js';
-import { toon } from './materials.js';
+import { toon, keepSharp } from './materials.js';
 import { rng } from './rand.js';
 
 export const STREET_HALF = 3.4;
@@ -258,7 +258,7 @@ function shopFront(kit, root) {
   // sign board above the door, sticker lettering
   blk(kit, M, cx, top - 0.42, 0.04, 3.6, 0.62, 0.08, '#3f6e6a');
   const signTex = stickerTexture('CADENCE', { w: 1024, h: 256, size: 190 });
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.3, 0.82), new THREE.MeshBasicMaterial({ map: signTex, transparent: true }));
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.3, 0.82), keepSharp(new THREE.MeshBasicMaterial({ map: signTex, alphaTest: 0.5 })) /* cut out, so it can flag itself sharp */);
   sign.applyMatrix4(mul(M, trs(cx, top - 0.4, 0.1, 0, 0, -0.03)));
   meshes.push(sign);
   // hanging blade sign: a big vinyl record on an iron bracket

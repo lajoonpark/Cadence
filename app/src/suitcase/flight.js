@@ -43,7 +43,16 @@ function poseIn(camera, matrixWorld, discAxis, radius = SHOP_RADIUS) {
 // The record flies in SCREEN space: a path of (x, y) on the screen, a depth and an apparent size.
 // The case sits far from the camera and the sleeve close to it, so a straight 3D arc between them
 // would leave the picture; this way the record always crosses the view and grows smoothly.
-export function createFlights({ scene, suitcase, camera, view }) {
+// scene: where the flying records go, in camera space (the shop's overlay scene, or a group parented to
+// the camera). worldCase: the suitcase lives in the world (the mini window), not in camera space, so
+// its platter is brought into camera space first.
+export function createFlights({ scene, suitcase, camera, view, worldCase = false }) {
+  const _inv = new THREE.Matrix4();
+  const toView = (m) => {
+    if (!worldCase) return m;
+    camera.updateWorldMatrix(true, false);
+    return _inv.copy(camera.matrixWorld).invert().multiply(m);
+  };
   const flights = [];
   let frozen = false;
   const th = () => Math.tan(THREE.MathUtils.degToRad(view.fov) / 2);
@@ -60,7 +69,7 @@ export function createFlights({ scene, suitcase, camera, view }) {
   const mix = (a, b, k) => ({ x: lerp(a.x, b.x, k), y: lerp(a.y, b.y, k), d: lerp(a.d, b.d, k), ra: lerp(a.ra, b.ra, k) });
 
   const seat = () => {
-    const m = suitcase.seatMatrix();             // overlay scene = camera space
+    const m = toView(suitcase.seatMatrix());     // camera space
     const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), sc = new THREE.Vector3();
     m.decompose(pos, quat, sc);
     const seatS = toScreen(pos, sc.x);
@@ -86,7 +95,7 @@ export function createFlights({ scene, suitcase, camera, view }) {
     const old = suitcase.liftRecord();
     if (old) {
       const sp = new THREE.Vector3(), sq = new THREE.Quaternion(), ss = new THREE.Vector3();
-      old.matrixWorld.decompose(sp, sq, ss);
+      toView(old.matrixWorld.clone()).decompose(sp, sq, ss);
       launch('out', { pos: sp, quat: sq, scale: ss.x }, old.cover, { spin: old.spin });
     }
     suitcase.held = true;

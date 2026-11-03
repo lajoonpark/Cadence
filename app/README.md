@@ -48,17 +48,26 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
   YouTube always sends have a fixed spot (Quick picks next to home, Listen again on the cube shelf,
   Forgotten favourites upstairs); the others fill the free spots. Hover a record and it comes out
   toward you with a paper name tag; click it and its vinyl pops out and flies into the suitcase.
+  On the crate table (Quick picks) the record under the cursor comes up with a neighbour each side,
+  fanned like a hand of cards, so each is a big target. At any rack, resting the cursor on a record
+  turns the camera about halfway toward it (`updateFocus` in `main.js`), and a record that is held up
+  takes the click wherever it has moved to, so you click the song, not the rack behind it.
   At the courtyard stall, hovering a crate makes all its records float up in front of you, spread
   out so every cover shows; the one under the cursor grows and comes forward with its tag.
 - **The suitcase** (`src/suitcase/`): the player, bottom left. A watercolour leather case with a
   record player: the record spins with the cover on its label, the tonearm creeps in as the song
-  plays, the knob is volume (drag it or scroll), the buttons are back / play / skip / like, and
+  plays, the knob is volume (drag it or scroll; scrolling down is quieter), the buttons are back / play / skip / like, and
   dragging the record scrubs. A paper tag beside it shows the song with a seekable progress line.
 - **Mini player**: **⌃⌥Space** anywhere opens the same suitcase at the cursor on a torn-paper card
   (`mini.html`, `electron/mini.cjs`); the lid flicks open on a physical hinge (`src/lid.js`). Esc,
-  clicking away or ⌃⌥Space again shuts it.
+  clicking away or ⌃⌥Space again shuts it. ⌥⌘S searches there too.
+- **Volume**: on macOS the knob, scroll and ↑ ↓ set the Mac's own output volume (`electron/sysvolume.cjs`,
+  osascript) and the player stays at 100%, so you can turn it up past where the Mac was. Elsewhere it
+  is the player's volume.
 - **Search**: **⌥⌘S** (Ctrl+Alt+S on Windows/Linux) opens a search bar (`src/search.js`); songs drop
-  down as paper slips, arrows + Enter or a click plays one.
+  down as paper slips, arrows + Enter or a click plays one. A song from search has no sleeve, so a
+  little painted record machine pops up by the suitcase, whirs, spits the record out of its top onto
+  the platter and pops away (`src/suitcase/machine.js`; `?machine=1.2` freezes it for screenshots).
 - **Settings**: the SETTINGS word (top right) or **⌘,** (Ctrl+, elsewhere) opens a paper card
   (`src/settings-panel.js`, stored by `src/settings.js` in localStorage, shared with the mini window).
   *Painting* sets the watercolour strength: Faint / Light / Medium / Heavy (default Heavy). Faint is the
@@ -69,12 +78,14 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
   `CADENCE_DUMP=1` saves the raw API responses to the app's userData (`dumps/`) and logs any item
   without art, for debugging.
 - **Keys**: Space play/pause, ← → back/skip, ↑ ↓ or scroll for volume, L like.
-- Covers and tags are drawn sharp: they write alpha 0 into the scene buffer (`crisp()` in
-  `materials.js`) and the watercolour pass leaves those pixels alone.
+- Covers and tags are drawn sharp: they write alpha 0 into the scene buffer (`crisp()` / `keepSharp()` in
+  `materials.js`, also the CADENCE sign) and the watercolour pass leaves those pixels alone. The covers
+  themselves are repainted once when they load (`src/coverpaint.js`: softened detail, a little colour
+  bleed, uneven drying, paper grain, an unpainted margin), so real album art sits in the painting.
 - In a plain browser (`npm run web`, screenshots) `src/music.js` fakes a record store with painted
   covers, so the shop can be worked on without Electron or an account.
 - Dev pages for screenshots: `lab.html?station=N` (one rack), `player-lab.html` (the suitcase in the shop),
-  `mini.html`, `search-lab.html`. Shop URL options: `?at=home|N` start there, `?hover=N`, `?fly=from,to,p`,
+  `mini.html`, `search-lab.html`, `cover-lab.html` (covers before / after painting). Shop URL options: `?at=home|N` start there, `?hover=N`, `?fly=from,to,p`,
   `?search=lemon`, `?shelves=8` (fake store: fill every station).
 
 ```

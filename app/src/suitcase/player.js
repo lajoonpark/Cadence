@@ -9,6 +9,7 @@
 //   player.update(dt, t)           every frame, before rendering
 //   player.show(on, instant)       fades the caption in and flicks the lid open the first time
 //   player.receive(disc)           a record was picked: { matrixWorld, cover } (see racks/)
+//   player.dispense(cover)         a song with no sleeve (search): the disc machine pops up and spits the record out
 //   player.over                    true while the pointer is over the case (keep racks from hovering through it)
 //   player.avoidRect()             the case and its caption as a box on screen in CSS px, for the section menu to keep clear of
 import * as THREE from 'three';
@@ -17,6 +18,7 @@ import { createCaption } from '../controls.js';
 import { renderOverlay } from '../watercolour.js';
 import { fitObject, ndcBounds } from './fit.js';
 import { createFlights } from './flight.js';
+import { createDiscMachine } from './machine.js';
 
 // The case sits in the bottom-left corner, upright: the same three-quarter view as the small window
 // (the deck seen from about 40 degrees up, the front edge level), with a small turn in toward the
@@ -40,6 +42,7 @@ export function createPlayer({ renderer, painter, music, camera }) {
   place.add(suitcase.root);
   scene.add(place);
   const flights = createFlights({ scene, suitcase, camera, view: ocam });
+  const machine = createDiscMachine({ parent: scene, camera, view: ocam, kit: suitcase.recordKit, onDisc: (d) => flights.receive(d) });
   const points = suitcase.fitPoints();
 
   const caption = createCaption({ variant: 'shop', onSeek: (s) => music.command('seek', s), onSignIn: () => music.signIn() });
@@ -131,6 +134,7 @@ export function createPlayer({ renderer, painter, music, camera }) {
       caption.tilt(pointer.x, -pointer.y);
     }
     suitcase.update(dt);
+    machine.update(dt);
     flights.update(dt);
     caption.setScrub(suitcase.scrubbing ? suitcase.progress : null);
   }
@@ -140,6 +144,14 @@ export function createPlayer({ renderer, painter, music, camera }) {
     suitcase,
     update,
     receive: (disc) => flights.receive(disc),
+    // stands just right of the case, above its caption, feet a third of the way down the case
+    dispense(cover) {
+      const W = renderer.domElement.clientWidth || innerWidth, H = renderer.domElement.clientHeight || innerHeight;
+      const x = ((caseRect.right + 0.07 * W) / W) * 2 - 1;
+      const y = 1 - ((caseRect.top + (caseRect.bottom - caseRect.top) * 0.4) / H) * 2;
+      machine.run(cover, { x, y, h: 0.26 });
+    },
+    machine,
     // The caption and case appear together; the lid flicks open the first time (instant for screenshots).
     show(on, instant = false) {
       shown = on;

@@ -53,6 +53,16 @@ export function glow(color) {
 
 // Album art and labels: lit like everything else, but flagged (alpha 0 in the scene buffer) so
 // the watercolour pass leaves them sharp. Covers are the one thing you need to read exactly.
+// Any material: flag it like crisp() so the watercolour pass leaves it sharp (signs you need to read).
+export function keepSharp(m) {
+  if (!WATERCOLOUR) return m;
+  m.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <dithering_fragment>', '#include <dithering_fragment>\n  gl_FragColor.a = 0.0;');
+  };
+  m.customProgramCacheKey = () => `sharp-${m.type}`;
+  return m;
+}
+
 export function crisp(params) {
   // a little self-light so paper and covers stay readable in the shop's warm, dim corners
   const m = new THREE.MeshLambertMaterial({ emissive: '#ffffff', emissiveMap: params.map, emissiveIntensity: 0.35, ...params });

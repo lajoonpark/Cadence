@@ -5,6 +5,7 @@ const { BrowserWindow, app } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseShelves, parseSearch, parsePlaylistSongs, continuation, artDebug } = require('./ytm-parse.cjs');
+const { createSystemVolume } = require('./sysvolume.cjs');
 
 const PARTITION = 'persist:ytm'; // cookies survive restarts, so you sign in once
 const HOME = 'https://music.youtube.com/';
@@ -143,7 +144,12 @@ function createYtm({ onState, onSignedIn }) {
     await win.loadURL(`${HOME}watch?${q}`);
   }
 
+  // On macOS the volume knob is the system volume; the player itself stays at full volume.
+  const sysVol = createSystemVolume();
+  if (sysVol) { sysVol.refresh(); setInterval(() => sysVol.refresh(), 2000); }
+
   async function command(name, arg) {
+    if (name === 'volume' && sysVol) { sysVol.set(arg); return true; }
     await ready();
     return js(`window.__cadence.command(${JSON.stringify(name)}, ${JSON.stringify(arg ?? null)})`);
   }
@@ -154,6 +160,10 @@ function createYtm({ onState, onSignedIn }) {
     if (win.isDestroyed()) return;
     const s = await js('window.__cadence?.state()').catch(() => null);
     if (!s) return;
+    if (sysVol) {
+      if (s.volume !== 100 && s.videoId) js('window.__cadence.command("volume", 100)').catch(() => {});
+      if (sysVol.get() !== null) s.volume = sysVol.get();
+    }
     onState(s);
     if (lastSignedIn === false && s.signedIn) onSignedIn?.();
     lastSignedIn = s.signedIn;

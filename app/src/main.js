@@ -6,7 +6,7 @@ import { createWatercolour, renderOverlay } from './watercolour.js';
 import { createSky } from './sky.js';
 import { createTimeOfDay } from './timeofday.js';
 import { createRack } from './racks/index.js';
-import { setScreenAvoid } from './racks/common.js';
+import { setScreenAvoid, getCover } from './racks/common.js';
 import { STATIONS, HOME, assignShelves } from './stations.js';
 import { createNav, AT_HOME } from './nav.js';
 import { createMenu } from './menu.js';
@@ -124,7 +124,8 @@ const menu = createMenu({
 nav.onChange(() => menu.setCurrent(nav.at));
 menu.setCurrent(nav.at);
 // the search bar (Option+Cmd+S / Ctrl+Alt+S) must exist before the key handlers below are registered
-const search = createSearch({ music, onPlay: (item) => music.play(item) }); // (search picks play without the flying vinyl)
+// a search pick has no sleeve: the disc machine pops up by the suitcase and spits the record out
+const search = createSearch({ music, onPlay: (item) => { music.play(item); suitcase.dispense(getCover(item.art, 512).tex); } });
 // Settings (Cmd+, or the SETTINGS word): swallows keys itself while open
 const settingsPanel = createSettingsPanel();
 // covers that were repaired in the background: let the racks reload them
@@ -247,6 +248,7 @@ window.__cadenceDebug = {
   suitcase,
   get stations() { return STATIONS.map((s, i) => ({ index: i, id: s.id, style: s.style, shelf: placed.get(i)?.title ?? null })); },
   get state() { return { phase: nav.phase, at: nav.at, settled: nav.settled, flying: nav.flying, progress: nav.progress, introDone: nav.introDone, sections: nav.sections }; },
+  get focus() { return { ...focus }; },
   go: (i) => nav.go(i),
   home: () => nav.go(AT_HOME),
   jump: (i) => nav.jump(i),
@@ -262,7 +264,44 @@ addEventListener('pointermove', (e) => {
   tilt.ty = (e.clientY / innerHeight) * 2 - 1;
   // words and buttons drawn over the picture do not pick records through them
   pointer = e.target === renderer.domElement ? new THREE.Vector2(tilt.tx, -tilt.ty) : null;
+  pointerMovedAt = performance.now();
 });
+let pointerMovedAt = 0;
+
+// ---- the camera turns toward the record you are on ----
+// At a rack, once the cursor has rested on a record for a moment, the camera eases about halfway
+// toward centring it, so the record you are about to click is in front of you rather than off at the
+// edge with the cursor on the rack behind it. While the camera turns, the hover is held (only moving
+// the cursor changes it), so the turn cannot shift a different record under a still cursor and chase it.
+const FOCUS = { dwell: 0.3, share: 0.5, maxYaw: 0.2, maxPitch: 0.12, rate: 2.6, release: 0.8 };
+const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, key: -1, rack: -1, on: 0, off: 0, lockedAt: -1 };
+const _fp = new THREE.Vector3();
+function updateFocus(dt) {
+  const at = nav.settled && nav.at !== AT_HOME && !pinnedPose ? nav.at : -1;
+  const rack = at >= 0 ? racks[at] : null;
+  const hov = rack && hoverArg === null ? rack.hovered : -1;
+  if (at !== focus.rack) { focus.rack = at; focus.key = -1; focus.tyaw = focus.tpitch = 0; }
+  if (hov !== focus.key) { focus.key = hov; focus.on = 0; }
+  if (hov >= 0) { focus.on += dt; focus.off = 0; } else focus.off += dt;
+  if (hov >= 0 && focus.on >= FOCUS.dwell && rack.focusPoint(_fp)) {
+    // the record's direction from the rig (the camera before tilt and focus)
+    rig.worldToLocal(_fp);
+    const yaw = Math.atan2(-_fp.x, -_fp.z), pitch = Math.atan2(_fp.y, Math.hypot(_fp.x, _fp.z));
+    focus.tyaw = THREE.MathUtils.clamp(yaw * FOCUS.share, -FOCUS.maxYaw, FOCUS.maxYaw);
+    focus.tpitch = THREE.MathUtils.clamp(pitch * FOCUS.share, -FOCUS.maxPitch, FOCUS.maxPitch);
+    if (focus.lockedAt < 0) focus.lockedAt = performance.now();
+  } else if (hov < 0 && focus.off > FOCUS.release) {
+    focus.tyaw = focus.tpitch = 0;
+  }
+  const k = 1 - Math.exp(-dt * FOCUS.rate);
+  focus.yaw += (focus.tyaw - focus.yaw) * k;
+  focus.pitch += (focus.tpitch - focus.pitch) * k;
+  // hold the hover while the camera turns under a still cursor
+  const turning = Math.abs(focus.tyaw - focus.yaw) + Math.abs(focus.tpitch - focus.pitch) > 0.004;
+  if (focus.lockedAt >= 0 && pointerMovedAt > focus.lockedAt) focus.lockedAt = -1;
+  const hold = rack && hov >= 0 && turning && focus.lockedAt >= 0 && pointerMovedAt <= focus.lockedAt;
+  if (hoverArg === null) for (const r of racks) if (r) r.forceHover = r === rack && hold ? hov : null;
+}
 document.addEventListener('pointerleave', () => { pointer = null; cursorX01 = null; });
 const currentRack = () => (nav.settled && nav.at !== AT_HOME ? racks[nav.at] : null);
 // any click during the intro skips to home
@@ -298,11 +337,12 @@ addEventListener('keydown', (e) => {
     nav.go(AT_HOME);
   }
 });
-// scroll keeps its own running volume (player state lags a few hundred ms behind)
+// scroll keeps its own running volume (player state lags a few hundred ms behind).
+// Scrolling down turns it down (Lajoon's ask; with macOS natural scrolling that is the finger moving down).
 let wheelVol = null, wheelIdle = 0;
 addEventListener('wheel', (e) => {
   if (settingsPanel.isOpen()) return;
-  wheelVol = Math.min(100, Math.max(0, (wheelVol ?? player.volume ?? 70) - e.deltaY * 0.05));
+  wheelVol = Math.min(100, Math.max(0, (wheelVol ?? player.volume ?? 70) + e.deltaY * 0.05));
   music.command('volume', wheelVol);
   clearTimeout(wheelIdle);
   wheelIdle = setTimeout(() => { wheelVol = null; }, 600);
@@ -315,6 +355,7 @@ const DOOR_OPEN = THREE.MathUtils.degToRad(105);
 
 let lastT = 0;
 let hoverOn = -1;
+let machineDone = false;
 let pickDone = false;
 function frame(t, dtOverride, draw = true) {
   // wall-clock time: a slow frame rate must not stretch flights, so allow a long step (nav and racks cope)
@@ -341,7 +382,8 @@ function frame(t, dtOverride, draw = true) {
   // gentle tilt at home, calmer at a rack so records stay put under the cursor
   const k = nav.tilt;
   camera.rotation.order = 'YXZ';
-  camera.rotation.set(-tilt.y * 0.09 * k, -tilt.x * 0.2 * k, 0);
+  updateFocus(dt);
+  camera.rotation.set(-tilt.y * 0.09 * k + focus.pitch, -tilt.x * 0.2 * k + focus.yaw, 0);
   rig.updateMatrixWorld();
 
   // ?hover=N holds record N up on the rack you are at (a pinned ?cam counts as the table)
@@ -401,6 +443,19 @@ if (shotMode) {
         await new Promise((r) => setTimeout(r, 100));
       }
       suitcase.freezeFlight(Number(params.get('pick')));
+      frame(t, 0.0001);
+    }
+    // ?machine=1.2: a search pick, frozen 1.2 s into the disc machine (after the hand-off, the record's flight too)
+    if (params.has('machine') && !machineDone) {
+      machineDone = true;
+      const { shelves } = await music.shelves();
+      const item = shelves[0].items[1];
+      const cover = getCover(item.art, 512);
+      await cover.loaded;
+      suitcase.dispense(cover.tex);
+      const at = Number(params.get('machine'));
+      suitcase.machine.seek(at);
+      if (at > suitcase.machine.handAt) suitcase.freezeFlight(Math.min(0.999, (at - suitcase.machine.handAt) / suitcase.flightDuration));
       frame(t, 0.0001);
     }
     return true;

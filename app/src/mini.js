@@ -3,7 +3,7 @@
 // the margin, clicking outside the window (main process sends close) or the shortcut again shuts
 // the lid, then the window is hidden. In a plain browser it previews on a fake desktop with the
 // fake record store; ?shot + window.__seek(t) make deterministic frames (t = seconds since the
-// lid was released).
+// lid was released). Option+Cmd+S (Ctrl+Alt+S) searches; a pick pops out of the disc machine.
 //   shot times: seconds since the lid was released; -1 = the lid still shut
 //   ?p=0.3  how far through the song     ?hover=playPause|knob|record|next|previous|like
 //   ?liked  show the song liked          ?paused  show it paused         ?idle  nothing playing
@@ -16,6 +16,10 @@ import { createSuitcase } from './suitcase.js';
 import { createCaption } from './controls.js';
 import { fitCamera } from './suitcase/fit.js';
 import { washBackdrop } from './suitcase/paint.js';
+import { createFlights } from './suitcase/flight.js';
+import { createDiscMachine } from './suitcase/machine.js';
+import { createSearch } from './search.js';
+import { getCover } from './racks/common.js';
 
 const params = new URLSearchParams(location.search);
 const shot = params.has('shot');
@@ -52,6 +56,21 @@ function frameCamera() {
 frameCamera();
 
 const caption = createCaption({ parent: stage, variant: 'mini', onSeek: (s) => music.command('seek', s) });
+
+// ---- search (Option+Cmd+S, as in the shop): a pick comes out of the disc machine onto the platter ----
+// Flights and the machine live in camera space: a group riding on the camera.
+scene.add(camera);
+const hud = new THREE.Group();
+camera.add(hud);
+const flights = createFlights({ scene: hud, suitcase, camera, view: camera, worldCase: true });
+const machine = createDiscMachine({ parent: hud, camera, view: camera, kit: suitcase.recordKit, onDisc: (d) => flights.receive(d) });
+const search = createSearch({
+  music,
+  onPlay: (item) => {
+    music.play(item);
+    machine.run(getCover(item.art, 512).tex, { x: 0.58, y: 0.08, h: 0.22 });   // stands to the right of the case, clear of the card's edge
+  },
+});
 caption.show(true, true);
 
 // ---- player state ----
@@ -98,6 +117,8 @@ function dismiss() {
 }
 function stepFrame(dt) {
   suitcase.update(dt);
+  machine.update(dt);
+  flights.update(dt);
   if (phase === 'open') appear = Math.min(1, appear + dt / 0.22);
   else if (phase === 'closing' && !suitcase.lidMoving) appear = Math.max(0, appear - dt / 0.16);
   applyAppear();
@@ -136,7 +157,7 @@ addEventListener('pointermove', (e) => {
 });
 document.addEventListener('pointerleave', () => { suitcase.hover(null); suitcase.lean(0, 0); });
 addEventListener('pointerdown', (e) => {
-  if (e.target.closest?.('.cad-tag')) return;
+  if (e.target.closest?.('.cad-tag, .cs')) return;   // the caption and the search bar handle their own clicks
   toNdc(e);
   if (!suitcase.pointerDown(ndc, camera) && (Math.abs(ndc.x) > 0.93 || Math.abs(ndc.y) > 0.93)) dismiss();   // the margin round the card
 });
@@ -146,6 +167,7 @@ addEventListener('wheel', (e) => { e.preventDefault(); suitcase.wheel(e.deltaY, 
 
 // ---- keys: Esc shuts it; Space, arrows, L as in the shop ----
 addEventListener('keydown', (e) => {
+  if (search.isOpen()) return;   // keys belong to the search bar (it closes itself on Esc)
   const cmd = { ' ': 'toggle', ArrowRight: 'next', ArrowLeft: 'previous', l: 'like', L: 'like' }[e.key];
   if (e.key === 'Escape') { e.preventDefault(); dismiss(); }
   else if (cmd) { e.preventDefault(); music.command(cmd); }

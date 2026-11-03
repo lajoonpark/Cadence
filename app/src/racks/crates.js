@@ -1,15 +1,14 @@
 // Station 7, the courtyard: a little market stall, a trestle table under a striped awning with
-// wooden crates of records on it, covers toward you. Digging works like at a real stall: point at a record and the ones in front
-// of it flip forward over the crate's low front lip (fanned like a pile), the one you point at
-// lifts a little and tips back to show its cover. One crate for a few records, up to four for 24.
+// wooden crates of records on it, covers toward you. Point at a crate and all its records pop out
+// and float in the air in front of you, spread out in a row or two so every cover shows; the one
+// under the cursor grows, comes forward and shows its name tag. Move off the crate and the floating
+// records and they drop back in. One crate for a few records, up to four for 24.
 // Lemon crates, a striped cloth and a painted title board dress the stall.
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, addBox, paint, WOOD, SLEEVE } from './common.js';
-import { popTo, viewForward } from './pop.js';
 
 const TABLE = 0.72;                 // table top height
-const POP = 1.25;                   // a hovered record floats this far from the camera
 const CW = 0.4;                     // crate outer width
 const SP = 0.05;                    // record to record
 const FLOOR = 0.06, LIP = 0.15;     // crate floor top and the low front
@@ -17,6 +16,26 @@ const LEAN = 0.2;
 const WOODS = ['#c9a06a', '#b88a58', '#d0aa74', '#a87a4a'];
 const ss = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(1, 1, 1), _p = new THREE.Vector3();
+const _rq = new THREE.Quaternion(), _fq = new THREE.Quaternion(), _iq = new THREE.Quaternion(), _wq = new THREE.Quaternion();
+const _ax = new THREE.Vector3(), _ay = new THREE.Vector3(), _az = new THREE.Vector3(), _o = new THREE.Vector3();
+const _hit = new THREE.Vector3(), _bx = new THREE.Box3(), _ray = new THREE.Ray(), _lr = new THREE.Ray(), _m4 = new THREE.Matrix4();
+const caster = new THREE.Raycaster();
+const now = () => performance.now() / 1000;
+
+// the fan of floating records
+const GAP = 0.05;                   // between floating records
+const FIT_W = 0.56, FIT_H = 0.6;    // the fan fills at most this much of the view
+const DIST = 1.1;                   // m from the camera: always in front of the stall, so records shrink to fit instead
+const SHIFT_X = 0.05, SHIFT_Y = 0.07; // fan centre, as a fraction of the view, right and up (clear of the suitcase)
+const GROW = 0.3, FORWARD = 0.14;   // the hovered one
+const HOLD = 0.35;                  // s the fan stays open after the cursor leaves it
+
+// ray (rack root space) against a box given by its matrix (root space) and half size; distance or Infinity
+function hitBox(ray, m, half) {
+  _ray.copy(ray).applyMatrix4(_m4.copy(m).invert());
+  _bx.min.copy(half).negate(); _bx.max.copy(half);
+  return _ray.intersectBox(_bx, _hit) ? _hit.distanceTo(_ray.origin) : Infinity;
+}
 
 const crateDepth = (per) => Math.min(0.62, Math.max(0.32, per * SP + 0.16));
 
@@ -44,9 +63,11 @@ function buildCrate(parent, Dc, mat, { closed = false, height = LIP + 0.09 } = {
 export function createCratesRack({ onPick }) {
   const core = createRackCore({ onPick, sign: { w: 1.1, h: 0.14 }, tag: { w: 0.34, h: 0.1 } });
   const stall = new THREE.Group();
-  const rest = new THREE.Matrix4();
   const lemonGeo = new THREE.IcosahedronGeometry(0.052, 1);
-  const rp = new THREE.Vector3(), pp = new THREE.Vector3(), fw = new THREE.Vector3();
+  const rp = new THREE.Vector3(), fp = new THREE.Vector3();
+  // the fan: which crate is open, when the cursor last was on it, its outline for the hit test
+  const fan = { cr: null, seen: 0, m: new THREE.Matrix4(), half: new THREE.Vector3(), t: 0, lastPick: 0 };
+  let crates = [];
 
   // trestle table, awning on four poles, striped cloth on the front, fixed
   function buildStall() {
@@ -82,14 +103,18 @@ export function createCratesRack({ onPick }) {
       // crate slots: [x, z]
       const slots = [[[0, 0.15]], [[-0.3, 0.15], [0.3, 0.15]],
         [[-0.3, 0.27], [0.3, 0.27], [0, -0.28]], [[-0.3, 0.27], [0.3, 0.27], [-0.3, -0.28], [0.3, -0.28]]][nc - 1];
-      const crates = slots.map(([x, z], k) => ({
+      crates = slots.map(([x, z], k) => ({
         x: x + (r() - 0.5) * 0.03, z: z + (r() - 0.5) * 0.04, up: TABLE, yaw: (r() - 0.5) * 0.08,
-        Dc: crateDepth(per), start: k * per,
+        Dc: crateDepth(per), start: k * per, count: Math.max(0, Math.min(per, n - k * per)),
       }));
+      fan.cr = null;
       crates.forEach((cr, k) => {
         const g = buildCrate(stall, cr.Dc, paint(WOODS[k % WOODS.length]));
         g.position.set(cr.x, cr.up, cr.z);
         g.rotation.y = cr.yaw;
+        // hit box: the crate and the records standing up out of it
+        cr.box = new THREE.Matrix4().compose(new THREE.Vector3(cr.x, cr.up + 0.2, cr.z), _q.setFromEuler(_e.set(0, cr.yaw, 0)), _s);
+        cr.half = new THREE.Vector3(CW / 2 + 0.02, 0.2, cr.Dc / 2 + 0.02);
       });
       // records in the crates
       c.sleeves.forEach((s, i) => {
@@ -102,11 +127,6 @@ export function createCratesRack({ onPick }) {
         s.lz = zb - (SLEEVE / 2) * Math.sin(s.lean);
         s.ly = cr.up + FLOOR + (SLEEVE / 2) * Math.cos(s.lean);
         s.roll = (r() - 0.5) * 0.03;
-        s.tip = 0;
-        const pos = place(cr, s.lx, s.ly, s.lz);
-        _q.setFromEuler(_e.set(-s.lean, cr.yaw, 0, 'YXZ'));
-        rest.compose(pos, _q, _s);
-        c.picker.add(i, rest, [0.16, 0.165, 0.028]);
       });
       // lemon crates at the table ends
       const lem = (x, z, up, yaw, full) => {
@@ -131,44 +151,127 @@ export function createCratesRack({ onPick }) {
       c.sign.mesh.position.set(0, 1.38, -0.62 + 0.018);
     },
 
+    // Closed: pointing at a crate opens it. Open: the floating records (nearest wins); the fan's
+    // outline and the open crate keep it open; anywhere else closes it after HOLD seconds.
+    pick(c, pointer, camera) {
+      fan.lastPick = now();
+      caster.setFromCamera(pointer, camera);
+      c.root.updateWorldMatrix(true, false);
+      _lr.copy(caster.ray).applyMatrix4(_m4.copy(c.root.matrixWorld).invert());
+      if (fan.cr) {
+        let best = -1, bestD = Infinity;
+        c.sleeves.forEach((s, i) => {
+          if (s.cr !== fan.cr || !s.floatM || s.empty) return;
+          const d = hitBox(_lr, s.floatM, s.floatHalf);
+          if (d < bestD) { bestD = d; best = i; }
+        });
+        if (best >= 0 || hitBox(_lr, fan.m, fan.half) < Infinity || hitBox(_lr, fan.cr.box, fan.cr.half) < Infinity) fan.seen = now();
+        if (best >= 0) return best;
+        if (now() - fan.seen < HOLD) return -1;
+        fan.cr = null;
+      }
+      let bestD = Infinity;
+      for (const cr of crates) {
+        if (!cr.count) continue;
+        const d = hitBox(_lr, cr.box, cr.half);
+        if (d < bestD) { bestD = d; fan.cr = cr; fan.seen = now(); }
+      }
+      return -1;
+    },
+
     layout(c, dt, camera, hovered) {
-      const cam = c.camLocal;
-      viewForward(fw, camera, c.root);
-      const hs = hovered >= 0 ? c.sleeves[hovered] : null;
-      const kt = 1 - Math.exp(-14 * dt);
-      c.sleeves.forEach((s) => {
-        const cr = s.cr;
-        // records in front of the hovered one (same crate) flip forward
-        const d = hs && hs.cr === cr ? hs.k - s.k : 0;
-        s.tip += ((d > 0 ? 1 : 0) - s.tip) * kt;
-        s.dd = d > 0 ? Math.min(d, 6) : s.dd ?? 1;
-        const L = s.lift, e = ss(L), t = ss(s.tip);
-        // standing pose in crate space
-        let ly = s.ly + 0.07 * s.peek + 0.03 * Math.sin(s.bump * Math.PI);
-        let lz = s.lz + 0.01 * s.peek;
-        let rx = -s.lean;
-        // flipped pose: resting on the lip, fanned
-        if (t > 0.001) {
-          const dd = s.dd;
-          const a = 0.92 + 0.07 * dd;
-          const py = cr.up + LIP + 0.012 * (6 - dd) + 0.012, pz = cr.Dc / 2 - 0.01;
-          const fy = py + 0.065 * Math.cos(a), fz = pz + 0.065 * Math.sin(a);
-          ly += (fy - ly) * t; lz += (fz - lz) * t; rx += (a - rx) * t;
+      fan.t += dt;
+      // a forced hover (?hover=N) opens that record's crate; losing the cursor closes the fan
+      if (hovered >= 0 && c.sleeves[hovered]) { fan.cr = c.sleeves[hovered].cr; fan.seen = now(); }
+      else if (fan.cr && now() - fan.lastPick > HOLD && now() - fan.seen > HOLD) fan.cr = null;
+
+      // the fan hangs in the camera rig's frame (the station view without the cursor tilt), so it
+      // floats still in the air while the view sways a little around it
+      const frame = camera.parent ?? camera;
+      frame.updateWorldMatrix(true, false);
+      c.root.getWorldQuaternion(_iq).invert();
+      frame.getWorldQuaternion(_wq);
+      _fq.copy(_iq).multiply(_wq);                      // rig orientation in root space
+      _ax.set(1, 0, 0).applyQuaternion(_fq);
+      _ay.set(0, 1, 0).applyQuaternion(_fq);
+      _az.set(0, 0, 1).applyQuaternion(_fq);            // toward the viewer
+      frame.getWorldPosition(_o);
+      c.root.worldToLocal(_o);
+
+      const cr = fan.cr;
+      let cols = 1, rows = 1, fs = 1, cellW = SLEEVE + GAP, cellH = SLEEVE + GAP + 0.06;
+      if (cr) {
+        const m = cr.count;
+        cols = m <= 4 ? m : Math.ceil(m / 2);
+        rows = Math.ceil(m / cols);
+        const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2), tanH = tanV * camera.aspect;
+        const D = DIST;
+        fs = Math.min(1, (FIT_W * 2 * tanH * D) / (cols * cellW - GAP), (FIT_H * 2 * tanV * D) / (rows * cellH - GAP + 0.12));
+        cellW *= fs; cellH *= fs;
+        const W = cols * cellW - GAP * fs, H = rows * cellH - GAP * fs;
+        fan.cx = SHIFT_X * 2 * tanH * D;
+        fan.cy = SHIFT_Y * 2 * tanV * D;
+        fan.D = D;
+        fan.fs = fs;
+        fan.half.set(W / 2 + 0.08, H / 2 + 0.14, 0.12);
+        fp.copy(_o).addScaledVector(_ax, fan.cx).addScaledVector(_ay, fan.cy).addScaledVector(_az, -D);
+        fan.m.compose(fp, _fq, _s);
+      }
+
+      c.sleeves.forEach((s, i) => {
+        const scr = s.cr;
+        const open = scr === cr && !!cr;
+        // staggered: records leave front to back and come home together
+        if (open && s.fl <= 0 && !s.flying) s.fl = -0.05 * s.k;
+        s.flying = open;
+        s.fl = Math.min(1, Math.max(open ? -1 : 0, (s.fl ?? 0) + (open ? 3.2 : -3.6) * dt));
+        const f = ss(s.fl);
+
+        // standing in the crate
+        const ly = s.ly + 0.07 * s.peek + 0.03 * Math.sin(s.bump * Math.PI);
+        rp.copy(place(scr, s.lx, ly, s.lz + 0.01 * s.peek));
+        _rq.setFromEuler(_e.set(-s.lean, scr.yaw, s.roll, 'YXZ'));
+
+        if (open) {
+          // its cell in the fan, filled row by row from the top left; a short last row is centred
+          const k = s.k, row = Math.floor(k / cols), inRow = row < rows - 1 ? cols : scr.count - row * cols;
+          const col = k - row * cols;
+          const x = fan.cx + (col - (inRow - 1) / 2) * cellW;
+          const y = fan.cy + ((rows - 1) / 2 - row) * cellH - 0.03;
+          const bob = 0.008 * Math.sin(fan.t * 1.5 + i * 1.7);
+          fp.copy(_o).addScaledVector(_ax, x).addScaledVector(_ay, y + bob).addScaledVector(_az, -fan.D);
+          // the hit box sits at the resting cell (no bob, no grow), so nothing shifts under the cursor
+          s.floatM ??= new THREE.Matrix4();
+          (s.floatHalf ??= new THREE.Vector3()).set(cellW / 2, cellH / 2, 0.02);
+          s.floatM.compose(_p.copy(fp).addScaledVector(_ay, -bob), _fq, _s);
+          // the hovered one grows and comes forward
+          const e = ss(s.lift);
+          fp.addScaledVector(_az, FORWARD * e);
+          // faces you, each with its own small tilt
+          _q.setFromEuler(_e.set(0.03 * Math.sin(i * 2.3), 0.05 * Math.sin(i * 3.1), (0.045 * Math.sin(i * 5.7)) * (1 - e)));
+          _q.premultiply(_fq);
+          if (f > 0) {
+            rp.lerp(fp, f).addScaledVector(_ay, 0.18 * Math.sin(Math.PI * f)); // arcs up out of the crate
+            _rq.slerp(_q, f);
+          }
+          s.mesh.scale.setScalar(1 + (fan.fs * (1 + GROW * e) - 1) * f);
+          s.floatScale = fan.fs;
+        } else {
+          if (f > 0) {
+            // on its way home: same path, back
+            fp.copy(s.lastFloat ?? rp);
+            _q.copy(s.lastFloatQ ?? _rq);
+            rp.lerp(fp, f).addScaledVector(_ay, 0.18 * Math.sin(Math.PI * f));
+            _rq.slerp(_q, f);
+          }
+          s.mesh.scale.setScalar(1 + ((s.floatScale ?? 1) - 1) * f);
         }
-        rp.copy(place(cr, s.lx, ly, lz));
-        let yaw = cr.yaw, scale = 1;
-        if (e > 0.001) {
-          // the hovered one floats up out of the crate toward you and faces you
-          popTo(pp, rp, cam, fw, POP, 0.5);
-          rp.lerp(pp, e);
-          const dx = cam.x - rp.x, dz = cam.z - rp.z;
-          yaw += (Math.atan2(dx, dz) - cr.yaw) * e;
-          rx += (-Math.atan2(cam.y - rp.y, Math.hypot(dx, dz)) - rx) * e;
-          scale = 1 + 0.25 * e;
+        if (open) {
+          (s.lastFloat ??= new THREE.Vector3()).copy(fp);
+          (s.lastFloatQ ??= new THREE.Quaternion()).copy(_q);
         }
         s.mesh.position.set(rp.x, rp.y + s.drop * 0.7, rp.z);
-        s.mesh.scale.setScalar(scale);
-        s.mesh.rotation.set(rx, yaw, s.roll * (1 - e) * (1 - t));
+        s.mesh.quaternion.copy(_rq);
       });
     },
   });

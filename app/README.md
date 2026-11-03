@@ -48,6 +48,8 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
   YouTube always sends have a fixed spot (Quick picks next to home, Listen again on the cube shelf,
   Forgotten favourites upstairs); the others fill the free spots. Hover a record and it comes out
   toward you with a paper name tag; click it and its vinyl pops out and flies into the suitcase.
+  At the courtyard stall, hovering a crate makes all its records float up in front of you, spread
+  out so every cover shows; the one under the cursor grows and comes forward with its tag.
 - **The suitcase** (`src/suitcase/`): the player, bottom left. A watercolour leather case with a
   record player: the record spins with the cover on its label, the tonearm creeps in as the song
   plays, the knob is volume (drag it or scroll), the buttons are back / play / skip / like, and

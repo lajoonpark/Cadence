@@ -59,6 +59,11 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
   clicking away or ⌃⌥Space again shuts it.
 - **Search**: **⌥⌘S** (Ctrl+Alt+S on Windows/Linux) opens a search bar (`src/search.js`); songs drop
   down as paper slips, arrows + Enter or a click plays one.
+- **Settings**: the SETTINGS word (top right) or **⌘,** (Ctrl+, elsewhere) opens a paper card
+  (`src/settings-panel.js`, stored by `src/settings.js` in localStorage, shared with the mini window).
+  *Painting* sets the watercolour strength: Faint / Light / Medium / Heavy (default Heavy). Faint is the
+  old single pass; the others flatten shading into washes and let colour bleed (`LEVELS` in
+  `src/watercolour.js`). `?wc=0..3` (or `CADENCE_QUERY="wc=2" npm run dev`) pins a level for screenshots.
 - **Covers**: playlist and mix covers are found in any of YouTube's thumbnail shapes; one that is
   missing or fails to load is painted as a collage of the playlist's first songs (`src/cover.js`).
   `CADENCE_DUMP=1` saves the raw API responses to the app's userData (`dumps/`) and logs any item

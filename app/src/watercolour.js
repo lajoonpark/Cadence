@@ -3,11 +3,13 @@
 // a high-key paper tint and an unpainted ragged border.
 import * as THREE from 'three';
 import { paperTexture } from './paint.js';
+import { settings } from './settings.js';
 
 const BOIL_FPS = 8; // edges re-wobble at a hand-drawn frame rate instead of every frame
 
-// How far the scene is pushed from "render" toward "painting". ?wc=0 is the old single pass (grain,
-// small blur); higher levels first flatten the image into washes (Kuwahara filter, half resolution)
+// How far the scene is pushed from "render" toward "painting" (Settings > Painting; ?wc=N overrides
+// for screenshots). 0 is the old single pass (grain, small blur); higher levels first flatten the
+// image into washes (Kuwahara filter)
 // and then let neighbouring washes run, in patches, into each other along a wandering flow (bleed).
 //   radius: Kuwahara radius in pixels (bigger = flatter, bigger washes)
 //   bleed:  how far colour runs, pixels; bleedMix: how strongly, in the patches where it runs
@@ -18,10 +20,11 @@ const LEVELS = [
   { radius: 4, bleed: 12, bleedMix: 0.75, bloom: 0.8, edge: 0.8, lift: 0.12 },
   { radius: 6, bleed: 20, bleedMix: 0.9, bloom: 1.0, edge: 0.7, lift: 0.15 },
 ];
-const DEFAULT_LEVEL = 2;
+export const PAINT_LEVELS = LEVELS.length;
+const validLevel = (v) => Number.isInteger(v) && v >= 0 && v < LEVELS.length;
 function levelFromUrl() {
-  const v = Number(new URLSearchParams(globalThis.location?.search ?? '').get('wc'));
-  return Number.isInteger(v) && v >= 0 && v < LEVELS.length ? v : DEFAULT_LEVEL;
+  const raw = new URLSearchParams(globalThis.location?.search ?? '').get('wc');
+  return raw !== null && validLevel(Number(raw)) ? Number(raw) : null;
 }
 
 const NOISE = /* glsl */ `
@@ -283,8 +286,11 @@ export function renderOverlay(renderer, overlay) {
 
 // { card: true } turns the unpainted border into a deckle-edged card and makes everything beyond it
 // transparent (for the small frameless window; the renderer needs alpha: true).
+// level: fixed strength; left out, it follows Settings > Painting live (unless ?wc= pins it).
 export function createWatercolour(renderer, { card = false, level = levelFromUrl() } = {}) {
-  const L = LEVELS[level];
+  const follow = level === null || level === undefined;
+  if (follow) level = validLevel(settings.get('paint')) ? settings.get('paint') : LEVELS.length - 1;
+  let L = LEVELS[level];
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   const target = new THREE.WebGLRenderTarget(size.x, size.y, {
     type: THREE.HalfFloatType,
@@ -306,9 +312,9 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
       near: { value: 0.1 },
       far: { value: 100 },
       tWash: { value: null },
-      bloomAmt: { value: L?.bloom ?? 0 },
-      edgeAmt: { value: L?.edge ?? 1 },
-      lift: { value: L?.lift ?? 0.07 },
+      bloomAmt: { value: 0 },
+      edgeAmt: { value: 1 },
+      lift: { value: 0.07 },
     },
     depthTest: false,
     depthWrite: false,
@@ -321,9 +327,18 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
 
   const dir = new THREE.Vector3();
 
-  // wash + bleed passes (level > 0)
+  // wash + bleed passes (level > 0), rebuilt when the level changes
   let wash = null;
-  if (L) {
+  function buildWash() {
+    const u = material.uniforms;
+    u.bloomAmt.value = L?.bloom ?? 0;
+    u.edgeAmt.value = L?.edge ?? 1;
+    u.lift.value = L?.lift ?? 0.07;
+    material.defines = { ...(card ? { CARD: '' } : {}), ...(L ? { WASH: '' } : {}) };
+    material.needsUpdate = true;
+    wash?.dispose();
+    wash = null;
+    if (!L) return;
     const full = () => new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType });
     const washT = full(), bleedT = full();
     const pass = (fragmentShader, defines, uniforms) => {
@@ -351,9 +366,22 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
         washP.m.uniforms.texel.value.set(1 / s.x, 1 / s.y);
         bleedP.m.uniforms.texel.value.set(1 / s.x, 1 / s.y);
       },
+      dispose() {
+        washT.dispose(); bleedT.dispose();
+        for (const p of [washP, bleedP]) { p.m.dispose(); p.sc.children[0].geometry.dispose(); }
+      },
     };
-    wash.setSize(size);
+    wash.setSize(renderer.getDrawingBufferSize(new THREE.Vector2()));
   }
+  buildWash();
+
+  function setLevel(n) {
+    if (!validLevel(n) || n === level) return;
+    level = n;
+    L = LEVELS[n];
+    buildWash();
+  }
+  if (follow) settings.on('paint', setLevel);
 
   return {
     // overlay = { scene, camera }: drawn into the same target after the world, depth cleared, so it is
@@ -385,5 +413,7 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
       material.uniforms.resolution.value.copy(s);
       wash?.setSize(s);
     },
+    setLevel,
+    get level() { return level; },
   };
 }

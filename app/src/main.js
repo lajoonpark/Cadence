@@ -11,6 +11,7 @@ import { STATIONS, HOME, assignShelves } from './stations.js';
 import { createNav, AT_HOME } from './nav.js';
 import { createMenu } from './menu.js';
 import { createSearch } from './search.js';
+import { createSettingsPanel } from './settings-panel.js';
 import { createMusic } from './music.js';
 import { createPlayer } from './suitcase/player.js';
 import '@fontsource/caveat-brush';
@@ -124,6 +125,8 @@ nav.onChange(() => menu.setCurrent(nav.at));
 menu.setCurrent(nav.at);
 // the search bar (Option+Cmd+S / Ctrl+Alt+S) must exist before the key handlers below are registered
 const search = createSearch({ music, onPlay: (item) => music.play(item) }); // (search picks play without the flying vinyl)
+// Settings (Cmd+, or the SETTINGS word): swallows keys itself while open
+const settingsPanel = createSettingsPanel();
 // covers that were repaired in the background: let the racks reload them
 music.onArt?.((item) => racks.forEach((r) => r?.refreshArt?.(item)));
 music.onState((s) => {
@@ -298,6 +301,7 @@ addEventListener('keydown', (e) => {
 // scroll keeps its own running volume (player state lags a few hundred ms behind)
 let wheelVol = null, wheelIdle = 0;
 addEventListener('wheel', (e) => {
+  if (settingsPanel.isOpen()) return;
   wheelVol = Math.min(100, Math.max(0, (wheelVol ?? player.volume ?? 70) - e.deltaY * 0.05));
   music.command('volume', wheelVol);
   clearTimeout(wheelIdle);
@@ -359,6 +363,7 @@ function frame(t, dtOverride, draw = true) {
   suitcase.show(ui, shotMode); // the lid flicks open the first time, when the intro reaches home
   suitcase.update(dt, t);
   menu.show(ui, shotMode);
+  settingsPanel.show(ui);
   menu.tilt(tilt.x, tilt.y);
   // at a station (or flying to one) the side words step back so the racks stay reachable
   menu.update(dt, cursorX01, !pinnedPose && nav.at !== AT_HOME);

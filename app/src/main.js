@@ -6,7 +6,7 @@ import { createWatercolour, renderOverlay } from './watercolour.js';
 import { createSky } from './sky.js';
 import { createTimeOfDay } from './timeofday.js';
 import { createRack } from './racks/index.js';
-import { setScreenAvoid, getCover } from './racks/common.js';
+import { setScreenAvoid, getCover, CLEAR_MAX } from './racks/common.js';
 import { STATIONS, HOME, assignShelves } from './stations.js';
 import { createNav, AT_HOME } from './nav.js';
 import { createMenu } from './menu.js';
@@ -36,9 +36,14 @@ scene.fog = new THREE.Fog('#f1cf9b', 18, 52);
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 120);
 const rig = new THREE.Group();
 rig.add(camera);
-// the same view without the hover focus turn (cursor tilt only): what lifted records dodge the suitcase in
-const steadyCam = camera.clone();
-rig.add(steadyCam);
+// where the view is heading without the suitcase shift (cursor tilt + the focus turn's target): racks
+// measure in it how far the camera must move for lifted records to clear the suitcase (racks/common.js)
+const aimCam = camera.clone();
+rig.add(aimCam);
+// that shift, eased: the camera slides left (or down) instead of the records sliding away
+const CLEAR = { rate: 6, max: CLEAR_MAX };
+const clear = { x: 0, y: 0 };
+const _shift = new THREE.Vector3();
 scene.add(rig);
 
 // Light: warm low sun for the street, soft sky fill. Interior lamps live in shop.js.
@@ -117,7 +122,7 @@ function ensureRack(i) {
 // the suitcase record player in the bottom-left corner (drawn in an overlay pass, subscribes to the player state itself)
 const suitcase = createPlayer({ renderer, painter, music, camera });
 // a hovered record never floats up underneath the suitcase or its caption
-setScreenAvoid(() => suitcase.avoidRect(), () => steadyCam);
+setScreenAvoid(() => suitcase.avoidRect(), () => aimCam);
 const menu = createMenu({
   onGo: (i) => nav.go(i),
   onHome: () => nav.go(AT_HOME),
@@ -252,6 +257,7 @@ window.__cadenceDebug = {
   get stations() { return STATIONS.map((s, i) => ({ index: i, id: s.id, style: s.style, shelf: placed.get(i)?.title ?? null })); },
   get state() { return { phase: nav.phase, at: nav.at, settled: nav.settled, flying: nav.flying, progress: nav.progress, introDone: nav.introDone, sections: nav.sections }; },
   get focus() { return { ...focus }; },
+  get clear() { return { ...clear, camera: camera.position.toArray() }; },
   go: (i) => nav.go(i),
   home: () => nav.go(AT_HOME),
   jump: (i) => nav.jump(i),
@@ -320,6 +326,8 @@ function updateFocus(dt) {
   if (hoverArg === null) for (const r of racks) if (r) r.forceHover = r === rack && focus.freeze ? focus.freeze.key : null;
 }
 document.addEventListener('pointerleave', () => { pointer = null; cursorX01 = null; });
+// the rack whose lifted records the camera makes room for (a pinned ?cam counts as the table, like ?hover)
+const currentShiftRack = () => (pinnedPose ? racks[nav.at === AT_HOME ? 0 : nav.at] : currentRack());
 const currentRack = () => (nav.settled && nav.at !== AT_HOME ? racks[nav.at] : null);
 // any click during the intro skips to home
 addEventListener('pointerdown', () => { if (nav.intro) nav.skipIntro(curT); });
@@ -401,8 +409,15 @@ function frame(t, dtOverride, draw = true) {
   camera.rotation.order = 'YXZ';
   updateFocus(dt);
   camera.rotation.set(-tilt.y * 0.09 * k + focus.pitch, -tilt.x * 0.2 * k + focus.yaw, 0);
-  steadyCam.rotation.order = 'YXZ';
-  steadyCam.rotation.set(-tilt.y * 0.09 * k, -tilt.x * 0.2 * k, 0);
+  aimCam.rotation.order = 'YXZ';
+  aimCam.rotation.set(-tilt.y * 0.09 * k + focus.tpitch, -tilt.x * 0.2 * k + focus.tyaw, 0);
+  // the rack you are at says how far its lifted records would need to move (last frame's measure)
+  const want = currentShiftRack()?.clearShift;
+  const kc = 1 - Math.exp(-dt * CLEAR.rate);
+  clear.x += (Math.min(CLEAR.max, want?.x ?? 0) - clear.x) * kc;
+  clear.y += (Math.min(CLEAR.max, want?.y ?? 0) - clear.y) * kc;
+  // records right on screen = camera left; records up = camera down (in the view's own frame)
+  camera.position.copy(_shift.set(-clear.x, -clear.y, 0).applyQuaternion(aimCam.quaternion));
   rig.updateMatrixWorld();
 
   // ?hover=N holds record N up on the rack you are at (a pinned ?cam counts as the table)
@@ -438,8 +453,8 @@ addEventListener('resize', () => {
   painter?.setSize();
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  steadyCam.aspect = camera.aspect;
-  steadyCam.updateProjectionMatrix();
+  aimCam.aspect = camera.aspect;
+  aimCam.updateProjectionMatrix();
 });
 
 // Deterministic time for screenshots: ?shot, then window.__seek(seconds).

@@ -7,6 +7,7 @@ import { createSky } from './sky.js';
 import { createTimeOfDay } from './timeofday.js';
 import { createRack } from './racks/index.js';
 import { setScreenAvoid, getCover, CLEAR_MAX } from './racks/common.js';
+import { measureRoom, fitShift } from './sightline.js';
 import { STATIONS, HOME, assignShelves } from './stations.js';
 import { createNav, AT_HOME } from './nav.js';
 import { createMenu } from './menu.js';
@@ -43,6 +44,17 @@ rig.add(aimCam);
 // that shift, eased: the camera slides left (or down) instead of the records sliding away
 const CLEAR = { rate: 6, max: CLEAR_MAX };
 const clear = { x: 0, y: 0 };
+const clearT = { x: 0, y: 0 };
+// how far the camera may slide at each station before scenery (an upright, a wall) blocks the view;
+// measured the first time a station needs a slide (sightline.js)
+const rooms = new Map();
+let forceSlide = null; // __cadenceDebug.slide = { x, y }: pin the slide for checks
+function roomHere() {
+  const key = pinnedPose ? 'pin' : nav.settled && nav.at !== AT_HOME ? nav.at : null;
+  if (key === null) return null;
+  if (!rooms.has(key)) rooms.set(key, measureRoom(scene, rig, camera, { skip: [rig], max: CLEAR.max }));
+  return rooms.get(key);
+}
 const _shift = new THREE.Vector3();
 scene.add(rig);
 
@@ -257,7 +269,8 @@ window.__cadenceDebug = {
   get stations() { return STATIONS.map((s, i) => ({ index: i, id: s.id, style: s.style, shelf: placed.get(i)?.title ?? null })); },
   get state() { return { phase: nav.phase, at: nav.at, settled: nav.settled, flying: nav.flying, progress: nav.progress, introDone: nav.introDone, sections: nav.sections }; },
   get focus() { return { ...focus }; },
-  get clear() { return { ...clear, camera: camera.position.toArray() }; },
+  set slide(v) { forceSlide = v; },
+  get clear() { return { ...clear, target: { ...clearT }, room: roomHere(), camera: camera.position.toArray() }; },
   go: (i) => nav.go(i),
   home: () => nav.go(AT_HOME),
   jump: (i) => nav.jump(i),
@@ -412,10 +425,20 @@ function frame(t, dtOverride, draw = true) {
   aimCam.rotation.order = 'YXZ';
   aimCam.rotation.set(-tilt.y * 0.09 * k + focus.tpitch, -tilt.x * 0.2 * k + focus.tyaw, 0);
   // the rack you are at says how far its lifted records would need to move (last frame's measure)
-  const want = currentShiftRack()?.clearShift;
+  const shiftRack = currentShiftRack();
+  const want = shiftRack?.clearShift;
+  fitShift(want, want && (want.x || want.y) ? roomHere() : null, CLEAR.max, clearT);
+  if (forceSlide) { clearT.x = forceSlide.x ?? 0; clearT.y = forceSlide.y ?? 0; }
+  // while the camera slides, the hover stays on the record it slides for (as during a focus turn):
+  // otherwise the slide puts another record under a still cursor, that one needs its own slide, and so on
+  const sliding = Math.abs(clearT.x - clear.x) + Math.abs(clearT.y - clear.y) > 0.01;
+  if (sliding && hoverArg === null && shiftRack && shiftRack === currentRack() && !focus.freeze) {
+    focus.freeze = { key: shiftRack.hovered, x: pointerPx.x, y: pointerPx.y };
+    shiftRack.forceHover = focus.freeze.key;
+  }
   const kc = 1 - Math.exp(-dt * CLEAR.rate);
-  clear.x += (Math.min(CLEAR.max, want?.x ?? 0) - clear.x) * kc;
-  clear.y += (Math.min(CLEAR.max, want?.y ?? 0) - clear.y) * kc;
+  clear.x += (clearT.x - clear.x) * kc;
+  clear.y += (clearT.y - clear.y) * kc;
   // records right on screen = camera left; records up = camera down (in the view's own frame)
   camera.position.copy(_shift.set(-clear.x, -clear.y, 0).applyQuaternion(aimCam.quaternion));
   rig.updateMatrixWorld();
@@ -455,6 +478,7 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   aimCam.aspect = camera.aspect;
   aimCam.updateProjectionMatrix();
+  rooms.clear();
 });
 
 // Deterministic time for screenshots: ?shot, then window.__seek(seconds).

@@ -16,7 +16,7 @@ for (const [x, y] of spots) {
   await page.mouse.move(x - 30, y - 10); await page.mouse.move(x, y, { steps: 5 });
   const seq = [];
   for (let i = 0; i < 40; i++) {
-    seq.push(await page.evaluate(() => { const d = window.__cadenceDebug, f = d.focus; return `${d.rack.hovered}:${f.yaw.toFixed(2)}`; }));
+    seq.push(await page.evaluate(() => { const d = window.__cadenceDebug, f = d.focus; return `${d.rack.hovered}:${f.yaw.toFixed(2)}:${d.clear.x.toFixed(2)}`; }));
     await page.waitForTimeout(150);
   }
   const hs = seq.map((s) => s.split(':')[0]);

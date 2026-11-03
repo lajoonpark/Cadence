@@ -184,6 +184,7 @@ export class Sleeve {
     // box faces: +x, -x, +y, -y (spine colour), +z (cover), -z (back: shows the art too, because
     // some racks are seen from behind)
     this.mesh = new THREE.Mesh(sleeveGeo(size, thick), [this.spineMat, this.spineMat, this.spineMat, this.spineMat, this.coverMat, this.coverMat]);
+    this.mesh.userData.sleeve = true; // sightline.js: records never count as scenery in the way
     this.mesh.castShadow = true;
     this.mesh.rotation.order = 'YXZ';
     this.mesh.visible = false;
@@ -518,7 +519,7 @@ const _need = { right: 0, up: 0 };
 // the camera may move (CLEAR_MAX, as main.js clamps it) and up is shorter does it go up instead.
 export const CLEAR_MAX = 1.0;
 function clearShiftFor(core, camera, out) {
-  out.x = out.y = 0;
+  out.x = out.y = out.right = out.up = 0;
   const rect = avoidFn?.();
   if (!rect || !rect.width) return out;
   let right = 0, up = 0, any = false;
@@ -530,6 +531,7 @@ function clearShiftFor(core, camera, out) {
     up = Math.max(up, _need.up);
   }
   if (!any) return out;
+  out.right = right; out.up = up; // both ways, for main.js when scenery blocks the chosen one
   if (right > CLEAR_MAX && up < right) out.y = up; else out.x = right;
   return out;
 }
@@ -572,7 +574,7 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
     shelf: null,
     camLocal: new THREE.Vector3(), // the camera in the root's space, refreshed before layout()
     play: createPlayTracker(),
-    clearShift: { x: 0, y: 0 },    // how far the lifted records would have to move to clear the suitcase (see measureClear)
+    clearShift: { x: 0, y: 0, right: 0, up: 0 },    // how far the lifted records would have to move to clear the suitcase (see measureClear)
   };
   if (core.sign) root.add(core.sign.mesh);
 
@@ -639,7 +641,7 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         def.layout(core, dt, camera, want);
         core.sleeves.forEach((s) => { s.mesh.visible = s.appear > 0 && !s.hidden; });
         if (active) clearShiftFor(core, avoidCamFn?.() ?? camera, core.clearShift);
-        else core.clearShift.x = core.clearShift.y = 0;
+        else core.clearShift.x = core.clearShift.y = core.clearShift.right = core.clearShift.up = 0;
         if (core.tag.mesh.parent) core.tag.mesh.scale.setScalar(0.6 + 0.4 * (core.sleeves[want]?.lift ?? 0));
       },
       // the item's art changed (repaired playlist cover): re-skin its sleeve(s) without re-laying out

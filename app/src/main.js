@@ -36,6 +36,9 @@ scene.fog = new THREE.Fog('#f1cf9b', 18, 52);
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 120);
 const rig = new THREE.Group();
 rig.add(camera);
+// the same view without the hover focus turn (cursor tilt only): what lifted records dodge the suitcase in
+const steadyCam = camera.clone();
+rig.add(steadyCam);
 scene.add(rig);
 
 // Light: warm low sun for the street, soft sky fill. Interior lamps live in shop.js.
@@ -114,7 +117,7 @@ function ensureRack(i) {
 // the suitcase record player in the bottom-left corner (drawn in an overlay pass, subscribes to the player state itself)
 const suitcase = createPlayer({ renderer, painter, music, camera });
 // a hovered record never floats up underneath the suitcase or its caption
-setScreenAvoid(() => suitcase.avoidRect());
+setScreenAvoid(() => suitcase.avoidRect(), () => steadyCam);
 const menu = createMenu({
   onGo: (i) => nav.go(i),
   onHome: () => nav.go(AT_HOME),
@@ -259,6 +262,7 @@ const tilt = { x: 0, y: 0, tx: 0, ty: 0 };
 let pointer = null; // normalised device coords, for picking records
 let cursorX01 = null; // 0..1 across the window, for the side menus
 addEventListener('pointermove', (e) => {
+  pointerPx.x = e.clientX; pointerPx.y = e.clientY;
   cursorX01 = e.clientX / innerWidth;
   tilt.tx = (e.clientX / innerWidth) * 2 - 1;
   tilt.ty = (e.clientY / innerHeight) * 2 - 1;
@@ -267,40 +271,53 @@ addEventListener('pointermove', (e) => {
   pointerMovedAt = performance.now();
 });
 let pointerMovedAt = 0;
+const pointerPx = { x: 0, y: 0 };
 
 // ---- the camera turns toward the record you are on ----
 // At a rack, once the cursor has rested on a record for a moment, the camera eases about halfway
 // toward centring it, so the record you are about to click is in front of you rather than off at the
-// edge with the cursor on the rack behind it. While the camera turns, the hover is held (only moving
-// the cursor changes it), so the turn cannot shift a different record under a still cursor and chase it.
-const FOCUS = { dwell: 0.3, share: 0.5, maxYaw: 0.2, maxPitch: 0.12, rate: 2.6, release: 0.8 };
-const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, key: -1, rack: -1, on: 0, off: 0, lockedAt: -1 };
+// edge with the cursor on the rack behind it.
+// Only the cursor changes what is hovered: whenever the camera starts a turn (toward a record, or back
+// when you leave the records), the hover is frozen until the cursor actually moves. Otherwise the turn
+// slides a different record under a still cursor, the camera turns to that one, and so on.
+// The aim is taken once per record (where it sits when the turn starts), not chased every frame.
+const FOCUS = { dwell: 0.3, rest: 0.15, share: 0.5, maxYaw: 0.2, maxPitch: 0.12, rate: 2.6, release: 0.8, unfreezePx: 4 };
+const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, key: -1, aimed: -1, rack: -1, on: 0, off: 0, freeze: null };
 const _fp = new THREE.Vector3();
+function aimAt(yaw, pitch, key) {
+  if (Math.abs(yaw - focus.tyaw) + Math.abs(pitch - focus.tpitch) < 0.01) return;
+  focus.tyaw = yaw; focus.tpitch = pitch;
+  focus.freeze = { key, x: pointerPx.x, y: pointerPx.y };
+}
 function updateFocus(dt) {
   const at = nav.settled && nav.at !== AT_HOME && !pinnedPose ? nav.at : -1;
   const rack = at >= 0 ? racks[at] : null;
+  if (at !== focus.rack) {
+    focus.rack = at; focus.key = focus.aimed = -1; focus.tyaw = focus.tpitch = 0; focus.freeze = null;
+  }
+  // moving the cursor (a few px, not a twitch) lets the hover follow it again
+  const fz = focus.freeze;
+  if (fz && Math.hypot(pointerPx.x - fz.x, pointerPx.y - fz.y) > FOCUS.unfreezePx) focus.freeze = null;
   const hov = rack && hoverArg === null ? rack.hovered : -1;
-  if (at !== focus.rack) { focus.rack = at; focus.key = -1; focus.tyaw = focus.tpitch = 0; }
   if (hov !== focus.key) { focus.key = hov; focus.on = 0; }
-  if (hov >= 0) { focus.on += dt; focus.off = 0; } else focus.off += dt;
-  if (hov >= 0 && focus.on >= FOCUS.dwell && rack.focusPoint(_fp)) {
+  // dwell counts only while the cursor rests, so sweeping across the rack never starts a turn
+  const resting = performance.now() - pointerMovedAt > FOCUS.rest * 1000;
+  if (hov >= 0) { if (resting || focus.freeze) focus.on += dt; focus.off = 0; } else focus.off += dt;
+  if (hov >= 0 && hov !== focus.aimed && focus.on >= FOCUS.dwell && rack.focusPoint(_fp)) {
     // the record's direction from the rig (the camera before tilt and focus)
     rig.worldToLocal(_fp);
     const yaw = Math.atan2(-_fp.x, -_fp.z), pitch = Math.atan2(_fp.y, Math.hypot(_fp.x, _fp.z));
-    focus.tyaw = THREE.MathUtils.clamp(yaw * FOCUS.share, -FOCUS.maxYaw, FOCUS.maxYaw);
-    focus.tpitch = THREE.MathUtils.clamp(pitch * FOCUS.share, -FOCUS.maxPitch, FOCUS.maxPitch);
-    if (focus.lockedAt < 0) focus.lockedAt = performance.now();
-  } else if (hov < 0 && focus.off > FOCUS.release) {
-    focus.tyaw = focus.tpitch = 0;
+    focus.aimed = hov;
+    aimAt(THREE.MathUtils.clamp(yaw * FOCUS.share, -FOCUS.maxYaw, FOCUS.maxYaw),
+      THREE.MathUtils.clamp(pitch * FOCUS.share, -FOCUS.maxPitch, FOCUS.maxPitch), hov);
+  } else if (hov < 0 && focus.off > FOCUS.release && focus.aimed !== -1) {
+    focus.aimed = -1;
+    aimAt(0, 0, -1);
   }
   const k = 1 - Math.exp(-dt * FOCUS.rate);
   focus.yaw += (focus.tyaw - focus.yaw) * k;
   focus.pitch += (focus.tpitch - focus.pitch) * k;
-  // hold the hover while the camera turns under a still cursor
-  const turning = Math.abs(focus.tyaw - focus.yaw) + Math.abs(focus.tpitch - focus.pitch) > 0.004;
-  if (focus.lockedAt >= 0 && pointerMovedAt > focus.lockedAt) focus.lockedAt = -1;
-  const hold = rack && hov >= 0 && turning && focus.lockedAt >= 0 && pointerMovedAt <= focus.lockedAt;
-  if (hoverArg === null) for (const r of racks) if (r) r.forceHover = r === rack && hold ? hov : null;
+  if (hoverArg === null) for (const r of racks) if (r) r.forceHover = r === rack && focus.freeze ? focus.freeze.key : null;
 }
 document.addEventListener('pointerleave', () => { pointer = null; cursorX01 = null; });
 const currentRack = () => (nav.settled && nav.at !== AT_HOME ? racks[nav.at] : null);
@@ -384,6 +401,8 @@ function frame(t, dtOverride, draw = true) {
   camera.rotation.order = 'YXZ';
   updateFocus(dt);
   camera.rotation.set(-tilt.y * 0.09 * k + focus.pitch, -tilt.x * 0.2 * k + focus.yaw, 0);
+  steadyCam.rotation.order = 'YXZ';
+  steadyCam.rotation.set(-tilt.y * 0.09 * k, -tilt.x * 0.2 * k, 0);
   rig.updateMatrixWorld();
 
   // ?hover=N holds record N up on the rack you are at (a pinned ?cam counts as the table)
@@ -419,6 +438,8 @@ addEventListener('resize', () => {
   painter?.setSize();
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
+  steadyCam.aspect = camera.aspect;
+  steadyCam.updateProjectionMatrix();
 });
 
 // Deterministic time for screenshots: ?shot, then window.__seek(seconds).

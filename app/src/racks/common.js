@@ -474,9 +474,12 @@ function createPlayTracker() {
 // ---- screen keep-out ---------------------------------------------------------------------------
 
 // A box on screen (CSS px, e.g. the suitcase and its caption) that lifted records must not float
-// under. main.js sets it once: setScreenAvoid(() => rect | null).
-let avoidFn = null;
-export function setScreenAvoid(fn) { avoidFn = fn; }
+// under. main.js sets it once: setScreenAvoid(() => rect | null, () => steadyCamera).
+// The slide is measured against the steady camera (the view without the hover focus turn): measured
+// against the live camera, the turn moves the record on screen, which changes the slide, which moves
+// the record the camera is turning toward, and the two chase each other.
+let avoidFn = null, avoidCamFn = null;
+export function setScreenAvoid(fn, cameraFn = null) { avoidFn = fn; avoidCamFn = cameraFn; }
 
 const _bb = new THREE.Box3(), _c = new THREE.Vector3(), _wp = new THREE.Vector3(), _right = new THREE.Vector3(), _up = new THREE.Vector3();
 const AVOID_MARGIN = 14;
@@ -615,7 +618,7 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         camera.getWorldPosition(core.camLocal); // world: the camera may sit in a rig (main.js)
         root.worldToLocal(core.camLocal);
         def.layout(core, dt, camera, want);
-        if (active) for (const s of core.sleeves) if (s.lift > 0.01) keepClear(s, camera);
+        if (active) { const ac = avoidCamFn?.() ?? camera; for (const s of core.sleeves) if (s.lift > 0.01) keepClear(s, ac); }
         core.sleeves.forEach((s) => { s.mesh.visible = s.appear > 0 && !s.hidden; });
         if (core.tag.mesh.parent) core.tag.mesh.scale.setScalar(0.6 + 0.4 * (core.sleeves[want]?.lift ?? 0));
       },

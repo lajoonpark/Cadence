@@ -91,11 +91,11 @@ const CSS = `
 `;
 
 const BUTTONS = [
-  { id: 'signin', label: 'SIGN IN', size: 'small', indent: 0, hidden: true },
-  { id: 'toggle', label: 'PLAY', size: 'big', indent: 0 },
-  { id: 'next', label: 'SKIP', size: 'small', indent: 34 },
-  { id: 'previous', label: 'BACK', size: 'small', indent: 14 },
-  { id: 'like', label: 'LIKE', size: 'small', indent: 44 },
+  { id: 'signin', label: 'Sign in', size: 'small', indent: 0, hidden: true },
+  { id: 'toggle', label: 'Play', size: 'big', indent: 0 },
+  { id: 'next', label: 'Skip', size: 'small', indent: 34 },
+  { id: 'previous', label: 'Back', size: 'small', indent: 14 },
+  { id: 'like', label: 'Like', size: 'small', indent: 44 },
 ];
 
 export function createControls({ onCommand, onSignIn }) {
@@ -169,9 +169,9 @@ export function createControls({ onCommand, onSignIn }) {
         els.signin.style.display = signIn;
         if (!signIn) fontReady.then(paint); // it had no size while hidden, so no plate yet
       }
-      setLabel('toggle', s.playerState === 1 || s.playerState === 3 ? 'PAUSE' : 'PLAY');
+      setLabel('toggle', s.playerState === 1 || s.playerState === 3 ? 'Pause' : 'Play');
       const liked = s.like === 'LIKE';
-      setLabel('like', liked ? 'LIKED' : 'LIKE');
+      setLabel('like', liked ? 'Liked' : 'Like');
       els.like.classList.toggle('on', liked);
       const has = !!(s.title || s.adPlaying);
       caption.classList.toggle('empty', !has);

@@ -122,7 +122,7 @@ export function createMenu({ onGo, onHome, getAvoid = () => null } = {}) {
     parent.stack.appendChild(el);
     return { el, side: parent, seed, label, fontPx: 0, lines: [] };
   }
-  const home = makeButton(H, 'HOME', 3, () => onHome?.());
+  const home = makeButton(H, 'Home', 3, () => onHome?.());
   home.el.setAttribute('aria-label', 'Back to the entrance');
   home.indent = 0;
 
@@ -147,7 +147,7 @@ export function createMenu({ onGo, onHome, getAvoid = () => null } = {}) {
   fontReady.then(() => { fontsOk = true; layout(); });
 
   function setLabel(b, text, base, maxW) {
-    const { size, lines } = fit(text.toUpperCase(), base, maxW);
+    const { size, lines } = fit(text, base, maxW);
     const span = b.el.querySelector('span');
     b.el.style.fontSize = `${size}px`;
     span.replaceChildren(...lines.map((l) => Object.assign(document.createElement('i'), { textContent: l })));
@@ -160,7 +160,7 @@ export function createMenu({ onGo, onHome, getAvoid = () => null } = {}) {
     const base = Math.min(40, Math.max(26, vh * 0.052));
     const maxW = Math.min(250, Math.max(140, vw * 0.17));
     for (const b of buttons) setLabel(b, b.label, base, maxW);
-    setLabel(home, 'HOME', base, maxW);
+    setLabel(home, 'Home', base, maxW);
     // stagger like the player's words: a hand-set look, not a column
     const nudge = [0, 0.5, 0.16, 0.7];
     for (const side of [L, R]) {

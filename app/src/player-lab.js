@@ -85,7 +85,7 @@ if (params.has('menu')) {
   const box = document.createElement('div');
   box.id = 'menu-standin';
   box.style.cssText = 'position:fixed;left:2vw;display:flex;flex-direction:column;gap:6px;pointer-events:none';
-  for (const w of ['QUICK PICKS', 'LISTEN AGAIN', 'MIXED FOR YOU', 'PLAYLISTS']) {
+  for (const w of ['Quick picks', 'Listen again', 'Mixed for you', 'Playlists']) {
     const d = document.createElement('div');
     d.textContent = w;
     d.style.cssText = 'font:40px "Caveat Brush",cursive;color:#fbf5e8;background:#2d3158;opacity:.55;padding:4px 36px 2px 24px;width:max-content';

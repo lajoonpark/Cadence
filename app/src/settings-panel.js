@@ -86,7 +86,7 @@ export function createSettingsPanel() {
   // the SETTINGS word, top right
   const btnWrap = document.createElement('div');
   btnWrap.className = 'st-btn';
-  const btn = word('SETTINGS', 17, () => toggle());
+  const btn = word('Settings', 17, () => toggle());
   btnWrap.appendChild(btn);
   document.body.appendChild(btnWrap);
 
@@ -122,7 +122,7 @@ export function createSettingsPanel() {
   markFps();
   settings.on('fps', markFps);
 
-  const done = word('DONE', 31, () => close());
+  const done = word('Done', 31, () => close());
   card.querySelector('.st-foot').appendChild(done);
 
   const words = [btn, ...paintWords, ...fpsWords, done];

@@ -85,7 +85,7 @@ export function createFloorleanRack({ onPick }) {
       const cam = c.camLocal;
       c.sleeves.forEach((s) => {
         const L = s.lift, m = s.mesh;
-        const hx = s.rx * 0.9, hy = 0.42, hz = s.frontZ + 0.3;
+        const hx = s.rx, hy = s.ry + (0.42 - s.ry) * 0.6, hz = s.frontZ + 0.14;
         m.position.set(
           s.rx + (hx - s.rx) * L,
           s.ry + (hy - s.ry) * L + s.drop * 0.7 + 0.03 * s.peek + 0.06 * Math.sin(s.bump * Math.PI),
@@ -94,7 +94,7 @@ export function createFloorleanRack({ onPick }) {
         // turn the face toward the camera (it is looking down onto the run)
         const face = -Math.atan2(cam.y - m.position.y, Math.max(0.3, cam.z - m.position.z));
         m.rotation.set(-s.tilt * (1 - L) + face * L, s.yawRest * (1 - L), s.roll * (1 - L));
-        m.scale.setScalar(1 + 0.18 * L);
+        m.scale.setScalar(1 + 0.05 * L);
       });
     },
   });

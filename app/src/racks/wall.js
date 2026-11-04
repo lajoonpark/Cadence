@@ -4,13 +4,12 @@
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, addBox, paint, WOOD, SLEEVE } from './common.js';
-import { popTo, viewForward } from './pop.js';
+import { popNear, viewForward } from './pop.js';
 
 const WALL_Z = -0.08;       // the plaster is here (rack origin is 0.08 in front of it)
 const LEAN = 0.1;           // covers lean back against the wall
 const REST_Z = 0.005;       // centre of a resting cover
 const ROWS_Y = { 1: [1.35], 2: [1.85, 1.2], 3: [2.1, 1.5, 0.9] }; // top row first
-const POP = 1.45;           // a hovered cover floats this far from the camera
 // few records get big covers, so a single ledge doesn't leave a bare wall
 const sizeFor = (n) => (n <= 3 ? 0.62 : n <= 5 ? 0.46 : SLEEVE);
 const rowsFor = (n) => (n <= 5 ? 1 : n <= 12 ? 2 : 3);
@@ -88,14 +87,14 @@ export function createWallRack({ onPick }) {
         s.push += (want - s.push) * k;
         const L = s.lift, e = L * L * (3 - 2 * L);
         rp.set(s.x + s.push, s.yc + 0.05 * s.peek + 0.03 * Math.sin(s.bump * Math.PI), REST_Z + 0.03 * s.peek);
-        popTo(pp, rp, cam, fw, POP * (0.5 + 0.5 * s.size / SLEEVE), 0.5);
+        popNear(pp, rp, cam, fw);
         rp.lerp(pp, e);
         rp.y += s.drop * 0.7;
         const dx = cam.x - rp.x, dz = cam.z - rp.z;
         const tyaw = Math.atan2(dx, dz);
         const tpitch = -Math.atan2(cam.y - rp.y, Math.hypot(dx, dz));
         s.mesh.position.copy(rp);
-        s.mesh.scale.setScalar(1 + 0.25 * (SLEEVE / s.size) * e);
+        s.mesh.scale.setScalar(1 + 0.06 * e);
         s.mesh.rotation.set(s.tilt + (tpitch - s.tilt) * e, s.yaw + (tyaw - s.yaw) * e, s.roll * (1 - e));
       });
     },

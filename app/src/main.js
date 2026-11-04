@@ -12,6 +12,7 @@ import { createNav, AT_HOME } from './nav.js';
 import { createMenu } from './menu.js';
 import { createSearch } from './search.js';
 import { createSettingsPanel } from './settings-panel.js';
+import { settings } from './settings.js';
 import { createMusic } from './music.js';
 import { createPlayer } from './suitcase/player.js';
 import '@fontsource/caveat-brush';
@@ -95,7 +96,7 @@ let player = {};
 let playingId = null;
 const racks = STATIONS.map(() => null); // created when a station first gets a shelf
 const placed = new Map();               // station index -> { key, title }: what each rack shows
-const hoverArg = params.has('hover') ? Number(params.get('hover')) : null;
+let hoverArg = params.has('hover') ? Number(params.get('hover')) : null;
 
 function pick(item, index, disc) {
   music.play(item);
@@ -267,6 +268,7 @@ music.onSignedIn(loadShelves);
 // for tests and the devtools console
 window.__cadenceDebug = {
   renderer,
+  camera,
   // ms per render step, GPU work included (each step waits for the GPU); shadows: also redraw the shadow map
   profile({ shadows = false, runs = 3 } = {}) {
     const gl = renderer.getContext(), px = new Uint8Array(4);
@@ -311,6 +313,8 @@ window.__cadenceDebug = {
     const v = rig.localToWorld(focus.pivot.clone()).project(camera);
     return { yaw: focus.yaw, pitch: focus.pitch, aimed: focus.aimed, pivotPx: [(v.x + 1) / 2 * innerWidth, (1 - v.y) / 2 * innerHeight] };
   },
+  // hold record k up on the rack you are at (null = back to the cursor), like ?hover=k
+  setHover(k) { hoverArg = k ?? null; if (k == null) for (const r of racks) if (r) r.forceHover = null; },
   go: (i) => nav.go(i),
   home: () => nav.go(AT_HOME),
   jump: (i) => nav.jump(i),
@@ -327,22 +331,22 @@ addEventListener('pointermove', (e) => {
   tilt.ty = (e.clientY / innerHeight) * 2 - 1;
   // words and buttons drawn over the picture do not pick records through them
   pointer = e.target === renderer.domElement ? new THREE.Vector2(tilt.tx, -tilt.ty) : null;
-  pointerMovedAt = performance.now();
 });
-let pointerMovedAt = 0;
 const pointerPx = { x: 0, y: 0 };
 
 // ---- the camera swings round the record you are on ----
-// At a rack, once the cursor has rested on a record for a moment, the camera orbits about that record
-// (turns and moves together, pivoting on it) about halfway toward facing it head-on. Pivoting on the
+// At a rack, the moment a record lifts, the camera orbits about that record (turns and moves together,
+// pivoting on it) about a third of the way toward facing it head-on. No waiting for the cursor to rest:
+// the turn runs on a critically damped spring, so it starts gently, never overshoots, and a new record
+// mid-turn just bends the motion instead of restarting it. Pivoting on the
 // record keeps it on the same spot on screen, so it stays under the cursor; only the room around it
 // swings. The camera never slides left / right / up / down on its own.
 // Only the cursor changes what is hovered: whenever the camera starts a swing (toward a record, or back
 // when you leave the records), the hover is frozen until the cursor actually moves. Otherwise the swing
 // moves a neighbouring record under a still cursor, the camera swings to that one, and so on.
 // The pivot is taken once per record (where it sits when the swing starts), not chased every frame.
-const FOCUS = { dwell: 0.12, rest: 0.08, share: 0.5, maxYaw: 0.2, maxPitch: 0.12, rate: 5, settle: 1.5, release: 0.8, unfreezePx: 4 };
-const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, key: -1, aimed: -1, rack: -1, on: 0, off: 0, freeze: null,
+const FOCUS = { dwell: 0.03, share: 0.35, maxYaw: 0.14, maxPitch: 0.09, omega: 11, rate: 6, settle: 2, release: 0.35, unfreezePx: 4 };
+const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, vyaw: 0, vpitch: 0, key: -1, aimed: -1, rack: -1, on: 0, off: 0, freeze: null,
   pivot: new THREE.Vector3(), // rig-local point the camera orbits about
   // the camera's pose in the rig without the cursor tilt; each frame's step of the swing is applied to it
   // as a rotation about the pivot, so the pivot stays put on screen even when it changes mid-swing
@@ -350,6 +354,11 @@ const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, key: -1, aimed: -1, rack: 
 const _fp = new THREE.Vector3();
 const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
 const orbitQ = (yaw, pitch, out) => out.setFromEuler(_e.set(pitch, yaw, 0));
+// exact critically damped spring step toward target (stable at any frame time); returns [x, v]
+function spring(x, v, target, w, dt) {
+  const d = x - target, c = v + w * d, e = Math.exp(-w * dt);
+  return [target + (d + c * dt) * e, (v - w * c * dt) * e];
+}
 function aimAt(yaw, pitch, key) {
   if (Math.abs(yaw - focus.tyaw) + Math.abs(pitch - focus.tpitch) < 0.01) return;
   focus.tyaw = yaw; focus.tpitch = pitch;
@@ -359,16 +368,15 @@ function updateFocus(dt) {
   const at = nav.settled && nav.at !== AT_HOME && !pinnedPose ? nav.at : -1;
   const rack = at >= 0 ? racks[at] : null;
   if (at !== focus.rack) {
-    focus.rack = at; focus.key = focus.aimed = -1; focus.tyaw = focus.tpitch = 0; focus.freeze = null;
+    focus.rack = at; focus.key = focus.aimed = -1; focus.tyaw = focus.tpitch = 0; focus.vyaw = focus.vpitch = 0; focus.freeze = null;
   }
   // moving the cursor (a few px, not a twitch) lets the hover follow it again
   const fz = focus.freeze;
   if (fz && Math.hypot(pointerPx.x - fz.x, pointerPx.y - fz.y) > FOCUS.unfreezePx) focus.freeze = null;
   const hov = rack && hoverArg === null ? rack.hovered : -1;
   if (hov !== focus.key) { focus.key = hov; focus.on = 0; }
-  // dwell counts only while the cursor rests, so sweeping across the rack never starts a turn
-  const resting = performance.now() - pointerMovedAt > FOCUS.rest * 1000;
-  if (hov >= 0) { if (resting || focus.freeze) focus.on += dt; focus.off = 0; } else focus.off += dt;
+  // a couple of frames on a record is enough (brushing past one for a single frame does not count)
+  if (hov >= 0) { focus.on += dt; focus.off = 0; } else focus.off += dt;
   if (hov >= 0 && hov !== focus.aimed && focus.on >= FOCUS.dwell && rack.focusPoint(_fp)) {
     // the record's direction from the rig (the camera before tilt and focus)
     rig.worldToLocal(_fp);
@@ -387,15 +395,16 @@ function updateFocus(dt) {
   const k = 1 - Math.exp(-dt * FOCUS.rate);
   if (focus.aimed === -1) {
     // no record to keep under the cursor: ease straight home (undoes any drift between pivots)
-    focus.yaw += (0 - focus.yaw) * k; focus.pitch += (0 - focus.pitch) * k;
+    [focus.yaw, focus.vyaw] = spring(focus.yaw, focus.vyaw, 0, FOCUS.omega, dt);
+    [focus.pitch, focus.vpitch] = spring(focus.pitch, focus.vpitch, 0, FOCUS.omega, dt);
     focus.offP.multiplyScalar(1 - k);
     focus.offQ.slerp(_qa.identity(), k);
     return finishFocus(rack);
   }
   // this frame's step of the swing, as a rotation about the pivot
   orbitQ(focus.yaw, focus.pitch, _qa).invert();
-  focus.yaw += (focus.tyaw - focus.yaw) * k;
-  focus.pitch += (focus.tpitch - focus.pitch) * k;
+  [focus.yaw, focus.vyaw] = spring(focus.yaw, focus.vyaw, focus.tyaw, FOCUS.omega, dt);
+  [focus.pitch, focus.vpitch] = spring(focus.pitch, focus.vpitch, focus.tpitch, FOCUS.omega, dt);
   orbitQ(focus.yaw, focus.pitch, _qb).multiply(_qa); // step = R(new) * R(old)^-1
   focus.offP.sub(focus.pivot).applyQuaternion(_qb).add(focus.pivot);
   focus.offQ.premultiply(_qb);
@@ -471,6 +480,24 @@ let lastT = 0;
 let hoverOn = -1;
 let machineDone = false;
 let pickDone = false;
+// ---- frame-rate readout (Settings > Frame rate, or ?fps=1): average fps and the slowest frame ----
+const fpsBox = document.createElement('div');
+fpsBox.style.cssText = 'position:fixed;left:8px;top:8px;z-index:50;font:12px/1.3 ui-monospace,monospace;color:#fff;background:rgba(0,0,0,.55);padding:3px 6px;border-radius:4px;pointer-events:none;display:none';
+document.body.appendChild(fpsBox);
+const fpsOn = () => params.get('fps') === '1' || !!settings.get('fps');
+fpsBox.style.display = fpsOn() ? 'block' : 'none';
+settings.on('fps', () => { fpsBox.style.display = fpsOn() ? 'block' : 'none'; });
+const fpsStat = { n: 0, since: performance.now(), last: performance.now(), worst: 0 };
+function tickFps() {
+  if (fpsBox.style.display === 'none') return;
+  const now = performance.now();
+  fpsStat.worst = Math.max(fpsStat.worst, now - fpsStat.last);
+  fpsStat.last = now; fpsStat.n++;
+  if (now - fpsStat.since < 500) return;
+  fpsBox.textContent = `${Math.round(fpsStat.n * 1000 / (now - fpsStat.since))} fps · worst ${Math.round(fpsStat.worst)} ms`;
+  fpsStat.n = 0; fpsStat.since = now; fpsStat.worst = 0;
+}
+
 function frame(t, dtOverride, draw = true) {
   // wall-clock time: a slow frame rate must not stretch flights, so allow a long step (nav and racks cope)
   const dt = dtOverride ?? Math.min(0.25, Math.max(0, t - lastT));
@@ -580,5 +607,5 @@ if (shotMode) {
   window.__ready = true;
 } else {
   const start = performance.now() - (Number(params.get('t')) || 0) * 1000;
-  renderer.setAnimationLoop(() => frame((performance.now() - start) / 1000));
+  renderer.setAnimationLoop(() => { tickFps(); frame((performance.now() - start) / 1000); });
 }

@@ -579,10 +579,19 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         let want = -1;
         if (forced !== null) want = forced < n ? forced : -1;
         else if (active && pointer && n) {
-          // the record already held up wins while the cursor is on it, wherever it has moved to
-          // (lifted toward you, slid clear of the suitcase): you click the song, not the rack behind it
-          want = heldUnder(core, pointer, camera);
-          if (want < 0) want = def.pick ? def.pick(core, pointer, camera) : core.picker.pick(pointer, camera, root);
+          const base = () => (def.pick ? def.pick(core, pointer, camera) : core.picker.pick(pointer, camera, root));
+          if (core.held) {
+            // a fan (trough): its records stand well away from their rest spots on purpose, so the fan
+            // keeps the cursor while you are on any of them
+            want = heldUnder(core, pointer, camera);
+            if (want < 0) want = base();
+          } else {
+            // every record keeps its own patch of screen (its rest spot), so a lifted record that has
+            // grown over a neighbour never hides it. The lifted one only catches the cursor where no
+            // other record is (the bit sticking out above the rack): you click the song, not the rack.
+            want = base();
+            if (want < 0) want = heldUnder(core, pointer, camera);
+          }
         }
         // picks >= 1000 are controls of the rack itself (page arrows...): def.control(core, id) on click
         core.control = want >= 1000 ? want - 1000 : -1;
@@ -626,6 +635,7 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         return true;
       },
       set forceHover(i) { forced = Number.isFinite(i) ? i : null; },
+      get core() { return core; }, // debug / checks (scripts/cover-check.mjs)
       // make this rack's hover covers now (in idle time); upload(tex) puts each on the GPU early
       prewarm(upload) { prewarmCovers(core.sleeves.map((s) => s.art), upload); },
       setPlaying(videoId) { core.play.set(videoId); },

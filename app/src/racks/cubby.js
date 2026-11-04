@@ -97,7 +97,7 @@ export function createCubbyRack({ onPick }) {
         s.lean = lean;
         s.roll = (r() - 0.5) * 0.04;
         // kept inside the frame: the bottom row would otherwise lift its card and tag off the screen
-        s.hover = new THREE.Vector3(cx * 0.9, Math.min(1.75, Math.max(0.7, floor + INNER / 2 + 0.03)), BACK + DEPTH + 0.13);
+        s.hover = new THREE.Vector3(cx, Math.min(1.75, Math.max(0.7, floor + INNER / 2 + 0.03)), BACK + DEPTH + 0.07);
         rest.makeTranslation(cx, floor + INNER / 2, BACK + DEPTH + 0.02);
         c.picker.add(i, rest, [PITCH / 2, PITCH / 2, 0.05]);
       });
@@ -117,7 +117,7 @@ export function createCubbyRack({ onPick }) {
         // face the camera when lifted: tip the top toward you or away to match its eye line
         const face = -Math.atan2(cam.y - m.position.y, Math.max(0.3, cam.z - m.position.z));
         m.rotation.set(-s.lean * (1 - L) + face * L, 0, s.roll * (1 - L));
-        m.scale.setScalar(1 + 0.2 * L);
+        m.scale.setScalar(1 + 0.06 * L);
       });
     },
   });

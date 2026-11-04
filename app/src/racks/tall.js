@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, addBox, instancedBoxes, WOOD, paint, SLEEVE } from './common.js';
-import { popTo, viewForward } from './pop.js';
+import { popNear, viewForward } from './pop.js';
 
 const FW = 3.7, FH = 2.95, FD = 0.36;
 const ZR = -0.195;                          // rear plane (the wall is at local z -0.25, its skirting at -0.2)
@@ -14,7 +14,6 @@ const ZC = ZR + FD / 2;                     // shelf centre in z
 const BOARD = [0.10, 0.64, 1.18, 1.72, 2.26]; // top of each level's board
 const REAL_Z = 0.1;                         // yours stand face-out in front of the filler spines (they stop at z 0.055)
 const LEAN = 0.12;
-const POP = 1.4;                            // a hovered record floats this far from the camera
 const X0 = -1.62, X1 = 1.02;                // where the real records may stand (ladder lives at x 1.5)
 const DIV = [-0.62, 0.62];                  // upright dividers
 const ss = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
@@ -112,14 +111,14 @@ export function createTallRack({ onPick }) {
         const bump = 0.04 * Math.sin(s.bump * Math.PI);
         rp.set(s.x, s.yc + 0.02 * s.peek, s.z0 + 0.1 * s.peek);
         sp.set(s.x, s.yc + 0.03, 0.34 + bump);        // first it slides out of the row...
-        popTo(pp, sp, cam, fw, POP, 0.5);             // ...then floats up close to you
+        popNear(pp, sp, cam, fw, 0.85);              // ...then floats a little toward you
         rp.lerp(sp, p1).lerp(pp, p2);
         rp.y += s.drop * 0.7;
         const dx = cam.x - rp.x, dz = cam.z - rp.z;
         const tyaw = Math.atan2(dx, dz);
         const tpitch = -Math.atan2(cam.y - rp.y, Math.hypot(dx, dz));
         s.mesh.position.copy(rp);
-        s.mesh.scale.setScalar(1 + 0.3 * p2);
+        s.mesh.scale.setScalar(1 + 0.06 * p2);
         s.mesh.rotation.set(-LEAN * (1 - p2) + tpitch * p2, s.yaw * (1 - p2) + tyaw * p2, s.roll * (1 - p2));
       });
     },

@@ -106,7 +106,7 @@ export function createEaselRack({ onPick }) {
       c.sleeves.forEach((s) => {
         if (s.hidden) return;
         const L = s.lift, m = s.mesh;
-        const hx = s.rx * 0.85, hy = 0.44, hz = 0.5;
+        const hx = s.rx, hy = s.ry + (0.44 - s.ry) * 0.6, hz = s.rz + (0.5 - s.rz) * 0.5;
         m.position.set(
           s.rx + (hx - s.rx) * L,
           s.ry + (hy - s.ry) * L + s.drop * 0.7 + 0.04 * s.peek + 0.06 * Math.sin(s.bump * Math.PI),
@@ -114,7 +114,7 @@ export function createEaselRack({ onPick }) {
         );
         const face = -Math.atan2(cam.y - m.position.y, Math.max(0.3, cam.z - m.position.z));
         m.rotation.set(-s.tilt * (1 - L) + face * L, 0, s.roll * (1 - L));
-        m.scale.setScalar(1 + 0.12 * L);
+        m.scale.setScalar(1 + 0.05 * L);
       });
       for (const [id, k] of [['back', 0], ['more', 1]]) {
         const p = plates[id];

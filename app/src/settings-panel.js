@@ -95,6 +95,7 @@ export function createSettingsPanel() {
   veil.className = 'st-veil';
   veil.innerHTML = `<div class="st-card"><div class="st-paper"></div><div class="st-head">Settings</div>
     <div class="st-row"><div class="st-label">Painting</div><div class="st-hint">How much the colours run and pool, like wet paint.</div><div class="st-opts"></div></div>
+    <div class="st-row"><div class="st-label">Frame rate</div><div class="st-hint">Show frames per second in the corner.</div><div class="st-opts st-fps"></div></div>
     <div class="st-foot"></div></div>`;
   document.body.appendChild(veil);
   const card = veil.querySelector('.st-card');
@@ -103,6 +104,7 @@ export function createSettingsPanel() {
   veil.addEventListener('click', () => close());
 
   const opts = card.querySelector('.st-opts');
+  const fpsOpts = card.querySelector('.st-fps');
   const paintWords = PAINT.map((label, i) => {
     const w = word(label, 23 + i * 5, () => settings.set('paint', i));
     opts.appendChild(w);
@@ -111,11 +113,19 @@ export function createSettingsPanel() {
   const mark = () => paintWords.forEach((w, i) => w.classList.toggle('on', i === settings.get('paint')));
   mark();
   settings.on('paint', mark);
+  const fpsWords = ['Off', 'On'].map((label, i) => {
+    const w = word(label, 41 + i * 3, () => settings.set('fps', i === 1));
+    fpsOpts.appendChild(w);
+    return w;
+  });
+  const markFps = () => fpsWords.forEach((w, i) => w.classList.toggle('on', (i === 1) === !!settings.get('fps')));
+  markFps();
+  settings.on('fps', markFps);
 
   const done = word('DONE', 31, () => close());
   card.querySelector('.st-foot').appendChild(done);
 
-  const words = [btn, ...paintWords, done];
+  const words = [btn, ...paintWords, ...fpsWords, done];
   const paintAll = () => words.forEach((w) => w.paint());
   document.fonts?.ready.then(paintAll);
   requestAnimationFrame(paintAll);

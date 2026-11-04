@@ -12,6 +12,7 @@ const KEY = 'cadence.settings';
 
 export const DEFAULTS = {
   paint: 3, // watercolour strength, 0..3 (see LEVELS in watercolour.js)
+  fps: false, // frame-rate readout in the corner (for perf reports)
 };
 
 function load() {

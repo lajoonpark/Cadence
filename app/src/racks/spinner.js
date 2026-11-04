@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, addBox, paint, WOOD, SLEEVE, smooth } from './common.js';
-import { popTo, viewForward } from './pop.js';
+import { popNear, viewForward } from './pop.js';
 
 const HALF = 0.33;                    // half width of a tower side
 const TIERS = [0.30, 0.86, 1.42];     // pocket floors
@@ -130,14 +130,14 @@ export function createSpinnerRack({ onPick }) {
         const L = s.lift, e = L * L * (3 - 2 * L);
         const out = 0.03 * s.peek + 0.03 * Math.sin(s.bump * Math.PI);
         rp.set(s.base.x + s.d.x * out, s.yc + 0.06 * s.peek, s.base.z + s.d.z * out);
-        popTo(pp, rp, cam, fw, 1.4, 0.5);
+        popNear(pp, rp, cam, fw, 0.88);
         rp.lerp(pp, e);
         rp.y += s.drop * 0.7;
         const dx = cam.x - rp.x, dz = cam.z - rp.z;
         const tyaw = s.a + wrap(Math.atan2(dx, dz) - s.a);
         const tpitch = -Math.atan2(cam.y - rp.y, Math.hypot(dx, dz));
         s.mesh.position.copy(rp);
-        s.mesh.scale.setScalar(1 + 0.25 * e);
+        s.mesh.scale.setScalar(1 + 0.06 * e);
         s.mesh.rotation.set(-LEAN + (tpitch + LEAN) * e, s.a + (tyaw - s.a) * e, s.roll * (1 - e));
       });
     },

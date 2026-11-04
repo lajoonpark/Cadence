@@ -340,42 +340,37 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
 
   const dir = new THREE.Vector3();
 
-  // wash + bleed passes (level > 0), rebuilt when the level changes
+  // wash + bleed passes (level > 0), rebuilt when the level changes.
+  // Two copies: `full`, and `lite` at half the size (a quarter of the pixels, half the radius: about
+  // 1/16 of the Kuwahara work) for while the camera travels. setMotion(on) eases between them over
+  // ~0.5 s through a small mix pass, so the paint never pops; at rest only `full` runs.
   let wash = null;
-  function buildWash() {
-    const u = material.uniforms;
-    u.bloomAmt.value = L?.bloom ?? 0;
-    u.edgeAmt.value = L?.edge ?? 1;
-    u.lift.value = L?.lift ?? 0.07;
-    material.defines = { ...(card ? { CARD: '' } : {}), ...(L ? { WASH: '' } : {}) };
-    material.needsUpdate = true;
-    wash?.dispose();
-    wash = null;
-    if (!L) return;
+  const pass = (fragmentShader, defines, uniforms) => {
+    const m = new THREE.ShaderMaterial({ vertexShader, fragmentShader, defines, uniforms, depthTest: false, depthWrite: false });
+    const sc = new THREE.Scene();
+    const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), m);
+    q.frustumCulled = false;
+    sc.add(q);
+    return { m, sc };
+  };
+  function makeWash(mul) {
     // The washes are soft by nature, so on a hi-dpi screen they are painted at CSS-pixel size and
     // upscaled; radius and bleed shrink to match, so a wash covers the same area as before.
-    const scale = washScale();
+    const scale = washScale() * mul;
     const radius = Math.max(1, Math.round(L.radius * scale));
     const ws = washSize(renderer.getDrawingBufferSize(new THREE.Vector2()), scale);
     const rt = () => new THREE.WebGLRenderTarget(ws.x, ws.y, { type: THREE.HalfFloatType });
     const prepT = rt(), washT = rt(), bleedT = rt();
-    const pass = (fragmentShader, defines, uniforms) => {
-      const m = new THREE.ShaderMaterial({ vertexShader, fragmentShader, defines, uniforms, depthTest: false, depthWrite: false });
-      const sc = new THREE.Scene();
-      const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), m);
-      q.frustumCulled = false;
-      sc.add(q);
-      return { m, sc };
-    };
     const prepP = pass(prepShader, {}, { tScene: { value: target.texture } });
     const washP = pass(washShader, { RADIUS: radius }, { tScene: { value: prepT.texture }, texel: { value: new THREE.Vector2() } });
     const bleedP = pass(bleedShader, { BLEED: (L.bleed * scale).toFixed(2), BLEED_MIX: L.bleedMix.toFixed(2), FRAG: (1 / scale).toFixed(4) }, {
       tWash: { value: washT.texture }, texel: { value: new THREE.Vector2() },
       paperOffset: material.uniforms.paperOffset, seed: material.uniforms.seed,
     });
-    material.uniforms.tWash.value = bleedT.texture;
-    wash = {
+    const w = {
+      mul,
       scale,
+      texture: bleedT.texture,
       steps: [[prepT, prepP], [washT, washP], [bleedT, bleedP]],
       render(sync) {
         for (const [t, p] of this.steps) { renderer.setRenderTarget(t); renderer.render(p.sc, postCam); sync?.(t === prepT ? 'prep' : t === washT ? 'wash' : 'bleed'); }
@@ -391,7 +386,54 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
         for (const p of [prepP, washP, bleedP]) { p.m.dispose(); p.sc.children[0].geometry.dispose(); }
       },
     };
-    wash.setSize(renderer.getDrawingBufferSize(new THREE.Vector2()));
+    w.setSize(renderer.getDrawingBufferSize(new THREE.Vector2()));
+    for (const [, p] of w.steps) renderer.compile(p.sc, postCam); // no shader-compile hitch the first time it runs
+    return w;
+  }
+  // blends lite (k = 1) over full (k = 0) while the two hand over
+  const mixT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+  const mixP = pass(/* glsl */ `
+uniform sampler2D tA;
+uniform sampler2D tB;
+uniform float k;
+varying vec2 vUv;
+void main() { gl_FragColor = mix(texture2D(tA, vUv), texture2D(tB, vUv), k); }
+`, {}, { tA: { value: null }, tB: { value: null }, k: { value: 0 } });
+  let lite = null;
+  let motion = false, motionK = 0, lastT = null, sawFrame = false;
+  function buildWash() {
+    const u = material.uniforms;
+    u.bloomAmt.value = L?.bloom ?? 0;
+    u.edgeAmt.value = L?.edge ?? 1;
+    u.lift.value = L?.lift ?? 0.07;
+    material.defines = { ...(card ? { CARD: '' } : {}), ...(L ? { WASH: '' } : {}) };
+    material.needsUpdate = true;
+    wash?.dispose(); lite?.dispose();
+    wash = lite = null;
+    if (!L) return;
+    wash = makeWash(1);
+    lite = makeWash(0.5);
+    const s = washSize(renderer.getDrawingBufferSize(new THREE.Vector2()), wash.scale);
+    mixT.setSize(s.x, s.y);
+    material.uniforms.tWash.value = wash.texture;
+  }
+  function renderWash(t, sync) {
+    if (!wash) return;
+    const dt = lastT === null ? 0 : Math.min(0.25, Math.max(0, t - lastT));
+    lastT = t;
+    if (dt === 0 && !sawFrame) motionK = motion ? 1 : 0; // the first frame starts where it should (the intro opens lite)
+    else motionK = motion ? Math.min(1, motionK + dt / 0.35) : Math.max(0, motionK - dt / 0.6);
+    sawFrame = true;
+    const u = material.uniforms;
+    if (motionK <= 0) { wash.render(sync); u.tWash.value = wash.texture; return; }
+    if (motionK >= 1) { lite.render(sync); u.tWash.value = lite.texture; return; }
+    wash.render(sync); lite.render(sync);
+    const mu = mixP.m.uniforms;
+    mu.tA.value = wash.texture; mu.tB.value = lite.texture;
+    mu.k.value = motionK * motionK * (3 - 2 * motionK);
+    renderer.setRenderTarget(mixT);
+    renderer.render(mixP.sc, postCam);
+    u.tWash.value = mixT.texture;
   }
   // drawing-buffer px per CSS px, inverted: 0.5 on a Retina screen, 1 elsewhere
   function washScale() { return Math.min(1, 1 / Math.max(1, renderer.getPixelRatio())); }
@@ -428,7 +470,7 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
       renderer.render(scene, camera);
       renderOverlay(renderer, overlay);
       sync?.('scene');
-      wash?.render(sync);
+      renderWash(t, sync);
       renderer.setRenderTarget(null);
       renderer.render(post, postCam);
       sync?.('final');
@@ -438,9 +480,16 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
       target.setSize(s.x, s.y);
       material.uniforms.resolution.value.copy(s);
       // a new pixel ratio (window moved to another screen) changes the wash scale: rebuild
-      if (wash && wash.scale !== washScale()) buildWash(); else wash?.setSize(s);
+      if (wash && wash.scale !== washScale()) buildWash();
+      else if (wash) {
+        wash.setSize(s); lite.setSize(s);
+        const m = washSize(s, wash.scale);
+        mixT.setSize(m.x, m.y);
+      }
     },
     setLevel,
+    // the camera is travelling (intro, flights): paint with the cheap half-size washes until it stops
+    setMotion(on) { motion = !!on; },
     get level() { return level; },
   };
 }

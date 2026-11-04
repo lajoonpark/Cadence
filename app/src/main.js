@@ -159,7 +159,9 @@ const shadowSun = new THREE.Vector3(), shadowSunOn = { v: null };
 const shadowsBusy = (sec = 1.2) => { shadowBusyUntil = Math.max(shadowBusyUntil, curT + sec); };
 function updateShadows(t) {
   const door = nav.doorOpen(t), hov = currentRack()?.hovered ?? -1;
-  if (door !== shadowDoor) { shadowDoor = door; shadowsBusy(0.2); }
+  // the door swinging during the intro redraws shadows only once it has stopped (a 4096 map at 20 Hz
+  // was a big share of the push-in's frame drops); a door moving later (a skip) still updates live
+  if (door !== shadowDoor) { shadowDoor = door; if (!nav.intro || door >= 1) shadowsBusy(0.2); }
   if (hov !== shadowHover) { shadowHover = hov; shadowsBusy(); }
   const sunMoved = sun.position.distanceToSquared(shadowSun) > 0.05 * 0.05 || sun.castShadow !== shadowSunOn.v;
   const due = t < shadowBusyUntil && t - shadowLastAt >= 1 / SHADOW_HZ;
@@ -554,8 +556,11 @@ function frame(t, dtOverride, draw = true) {
   menu.update(dt, cursorX01, !pinnedPose && nav.at !== AT_HOME);
   if (!draw) return;
   updateShadows(t);
-  if (painter) painter.render(scene, camera, t, suitcase.overlay);
-  else { renderer.render(scene, camera); renderOverlay(renderer, suitcase.overlay); }
+  if (painter) {
+    // cheaper paint while the camera travels (?motion=1 pins it on, to compare in screenshots)
+    painter.setMotion?.(params.get('motion') === '1' || ((nav.intro || nav.phase === 'fly') && !pinnedPose));
+    painter.render(scene, camera, t, suitcase.overlay);
+  } else { renderer.render(scene, camera); renderOverlay(renderer, suitcase.overlay); }
 }
 
 addEventListener('resize', () => {

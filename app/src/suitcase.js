@@ -9,6 +9,7 @@
 //   sc.update(dt)                 every frame
 //   sc.open() / sc.close()        the lid is a physical hinge (lid.js): flick, swing, land with a bounce
 //   sc.hover(ndc, camera)         -> { control, over }   hit-test + hover feedback (ndc = Vector2 or null)
+//   sc.touches(ndc, camera)       -> bool   the pointer is on the case's actual shape (no feedback)
 //   sc.pointerDown/Drag/Up        presses, knob drags, record scrubbing
 //   sc.wheel(deltaY, deltaMode)   volume
 //   sc.lean(nx, ny)               leans the case toward the cursor (-1..1 each)
@@ -447,6 +448,8 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
     root, parts, recordKit, hinge,
     setState, update, open, close, hover, pointerDown, pointerDrag, pointerUp, wheel, nudgeVolume, lean, cursor,
     placeRecord, liftRecord, fitPoints,
+    // is the pointer on the case itself, where it is right now (no hover feedback)
+    touches(ndc, camera) { return !!ndc && pick(ndc, camera).over; },
     set enabled(v) { enabled = v; if (!v) { cancelDrag(); setHover(null); } },
     set forceHover(name) { forced = name; },      // screenshots
     get dragging() { return !!drag; },

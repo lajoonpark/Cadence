@@ -11,7 +11,7 @@
 //   player.receive(disc)           a record was picked: { matrixWorld, cover } (see racks/)
 //   player.dispense(cover)         a song with no sleeve (search): the disc machine pops up and spits the record out
 //   player.tuck(on)                at a rack: tuck the case away (lid shuts, it sinks into the corner) so it never
-//                                  covers records; it comes back up while the cursor is near it or a record flies in
+//                                  covers records; it comes back up while the cursor is on it or a record flies in
 //   player.wake(s)                 come up now and stay up s seconds (a pick: the record is about to fly in)
 //   player.over                    true while the pointer is over the case (keep racks from hovering through it)
 //   player.avoidRect()             the case and its caption as a box on screen in CSS px, for the section menu to keep clear of
@@ -35,8 +35,8 @@ const TOP_LIMIT = 0.5;
 const GAP = 14;        // between the case and its caption
 // Tucked away: the lid shuts first, then the case sinks until only a strip of the closed case peeks up
 // from the bottom edge (sink = share of the open case's height on screen). It wakes when the cursor
-// comes near it (the strip, or the whole case while it is up) and whenever a record is on its way in.
-const TUCK = { delay: 0.35, shutFirst: 0.3, sink: 0.62, rate: 8, margin: 0.06, hold: 0.9 };
+// touches it (the strip, or the whole case while it is up) and whenever a record is on its way in.
+const TUCK = { delay: 0.35, shutFirst: 0.3, sink: 0.62, rate: 8, hold: 0.9 };
 
 export function createPlayer({ renderer, painter, music, camera }) {
   const scene = new THREE.Scene();
@@ -62,7 +62,6 @@ export function createPlayer({ renderer, painter, music, camera }) {
   let aspect = 0, fov = 0, viewH = 0;
   let box = { x0: -1, x1: -0.6, y0: -0.9, y1: -0.4 };     // the case's wanted box, NDC
   let caseRect = null;                                     // where it ended up, CSS px
-  let caseNdc = { x0: -1, x1: -0.6, y0: -0.9, y1: -0.4 };  // the same in NDC (lid open, not sunk)
   let baseY = 0, sinkWorld = 0;                            // the fitted height in camera space, and how far a full tuck lowers it
   const centre = new THREE.Vector2();
   function layout() {
@@ -77,7 +76,6 @@ export function createPlayer({ renderer, painter, music, camera }) {
     centre.set((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2);
     aspect = camera.aspect; fov = camera.fov; viewH = H;
     const b = ndcBounds(points, place, ocam);
-    caseNdc = b;
     baseY = place.position.y;
     sinkWorld = (b.y1 - b.y0) * TUCK.sink * Math.tan(THREE.MathUtils.degToRad(ocam.fov) / 2) * -place.position.z;
     caseRect = {
@@ -135,13 +133,12 @@ export function createPlayer({ renderer, painter, music, camera }) {
 
   // ---- tucking away ----
   let tuckWanted = false, away = 0, hold = 0, sunk = 0, lidShut = false;
+  // Wakes only when the cursor is ON the case: the strip that peeks up while tucked, the whole case
+  // while it is up (a ray against its real shape, not a box round it), so records in the corner just
+  // above the strip stay reachable. Only on the canvas: menus and the caption do not count.
   function near() {
-    if (!pointer) return false;
-    const m = TUCK.margin, b = caseNdc;
-    if (pointer.x < b.x0 - m || pointer.x > b.x1 + m) return false;
-    // while up: anywhere over the case; while down: only the strip that peeks up
-    const top = b.y1 - (b.y1 - b.y0) * TUCK.sink * Math.min(1, sunk * 1.5);
-    return pointer.y < top + m;
+    if (!pointer || !onCanvasLast) return false;
+    return suitcase.touches(pointer, ocam);
   }
   function tuckStep(dt) {
     if (flights.active || machine.active) hold = TUCK.hold; else hold = Math.max(0, hold - dt);

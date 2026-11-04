@@ -61,7 +61,7 @@ function buildCrate(parent, Dc, mat, { closed = false, height = LIP + 0.09 } = {
 }
 
 export function createCratesRack({ onPick }) {
-  const core = createRackCore({ onPick, sign: { w: 1.1, h: 0.14 }, tag: { w: 0.34, h: 0.1 } });
+  const core = createRackCore({ onPick, sign: { w: 1.1, h: 0.14 }, tag: { w: 0.34, h: 0.1, wrap: false } });
   const stall = new THREE.Group();
   const lemonGeo = new THREE.IcosahedronGeometry(0.052, 1);
   const rp = new THREE.Vector3(), fp = new THREE.Vector3();

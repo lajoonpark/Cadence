@@ -47,7 +47,7 @@ function buildUnit(g) {
 }
 
 export function createTallRack({ onPick }) {
-  const core = createRackCore({ onPick, sign: { w: 1.25, h: 0.15 } });
+  const core = createRackCore({ onPick, sign: { w: 1.25, h: 0.15 }, tag: { w: 0.46, h: 0.135 } }); // farthest rack: the wall's bigger tag
   const rp = new THREE.Vector3(), sp = new THREE.Vector3(), pp = new THREE.Vector3(), fw = new THREE.Vector3();
   const rest = new THREE.Matrix4();
   const fillers = new THREE.Group();
@@ -57,7 +57,7 @@ export function createTallRack({ onPick }) {
       buildUnit(c.root);
       c.root.add(fillers);
       c.sign.mesh.position.set(0, 2.865, ZC + 0.01 + (FD + 0.04) / 2 + 0.004);
-      c.tag.mesh.position.set(0.02, -SLEEVE / 2 - 0.03, 0.011);
+      c.tag.mesh.position.set(0.02, -SLEEVE / 2 - 0.05, 0.011); // the bigger tag clears the cover's own lettering
     },
 
     items(c, items) {

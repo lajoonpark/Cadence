@@ -388,13 +388,6 @@ export function addBox(parent, [w, h, d], mat, [x, y, z] = [0, 0, 0], [rx, ry, r
 
 // ---- sign and tag -----------------------------------------------------------------------------
 
-// Text that shrinks until it fits.
-function fitText(g, text, x, y, maxW, size) {
-  let s = size;
-  do { g.font = `${s}px ${FONT}`; s -= 2; } while (g.measureText(text).width > maxW && s > 12);
-  g.fillText(text, x, y);
-}
-
 // The shelf title, painted like the buttons: paper letters left in an indigo brush stroke.
 export function createSign({ w = 1.2, h = 0.15, color = INK, res = 1024 } = {}) {
   const CW = res, CH = Math.round(res * h / w);
@@ -434,10 +427,41 @@ export function createSign({ w = 1.2, h = 0.15, color = INK, res = 1024 } = {}) 
   return sign;
 }
 
-// A torn-paper tag: cream card with a ragged edge, title in ink, artist in sepia.
-function drawTag(g, w, h, item, seed) {
-  const r = rng(seed);
-  g.clearRect(0, 0, w, h);
+// A torn-paper tag: cream card with a ragged edge, title in ink, artist in sepia. A title too long for
+// one line at a readable size wraps onto a second line (the card grows, see createTag) instead of
+// shrinking to a smudge; only past two lines does it shrink, then end in an ellipsis.
+const TAG_W = 640, TAG_H1 = 190, TAG_H2 = 262; // canvas px: card with one / two title lines
+function ellipsize(g, text, maxW) {
+  if (g.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && g.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t.trimEnd() + '…';
+}
+// title lines and their font size: one line if it fits at >= 66 px, else two balanced lines
+// (wrap off: one line, shrinking to 48 px, then an ellipsis)
+function tagTitle(g, title, maxW, wrap) {
+  const fit = (lines, s) => { g.font = `${s}px ${FONT}`; return lines.every((l) => g.measureText(l).width <= maxW); };
+  for (let s = 80; s >= (wrap ? 66 : 48); s -= 2) if (fit([title], s)) return { lines: [title], size: s };
+  if (!wrap) { g.font = `48px ${FONT}`; return { lines: [ellipsize(g, title, maxW)], size: 48 }; }
+  const words = title.split(/\s+/);
+  let best = null;
+  for (let k = 1; k < words.length; k++) {
+    const a = words.slice(0, k).join(' '), b = words.slice(k).join(' ');
+    g.font = `60px ${FONT}`;
+    const w = Math.max(g.measureText(a).width, g.measureText(b).width);
+    if (!best || w < best.w) best = { w, lines: [a, b] };
+  }
+  const lines = best ? best.lines : [title];
+  for (let s = 66; s >= 48; s -= 2) if (fit(lines, s)) return { lines, size: s };
+  g.font = `48px ${FONT}`;
+  return { lines: lines.map((l) => ellipsize(g, l, maxW)), size: 48 };
+}
+function drawTag(g, item, seed, wrap) {
+  const r = rng(seed), w = TAG_W;
+  g.clearRect(0, 0, TAG_W, TAG_H2);
+  g.textBaseline = 'middle';
+  const { lines, size } = tagTitle(g, item.title || '', w - 68, wrap);
+  const h = lines.length > 1 ? TAG_H2 : TAG_H1;
   g.beginPath();
   const pad = 10;
   g.moveTo(pad, pad + r() * 6);
@@ -451,26 +475,34 @@ function drawTag(g, w, h, item, seed) {
   g.strokeStyle = 'rgba(120,90,60,.35)';
   g.lineWidth = 3;
   g.stroke();
-  g.textBaseline = 'middle';
   g.fillStyle = '#2b2436';
-  fitText(g, item.title, 34, h * 0.4, w - 68, 76);
+  g.font = `${size}px ${FONT}`;
+  const lh = size * 1.02, top = lines.length > 1 ? 30 + lh / 2 : h * 0.4;
+  lines.forEach((l, i) => g.fillText(l, 34, top + i * lh));
   g.fillStyle = '#7a5a40';
-  fitText(g, item.subtitle || '', 36, h * 0.76, w - 72, 44);
+  let s = 48;
+  const sub = item.subtitle || '';
+  do { g.font = `${s}px ${FONT}`; s -= 2; } while (g.measureText(sub).width > w - 72 && s > 36);
+  g.fillText(ellipsize(g, sub, w - 72), 36, h * (lines.length > 1 ? 0.8 : 0.76));
 }
 
-export function createTag({ w = 0.34, h = 0.1 } = {}) {
-  const [c, g] = canvas(640, 190);
+// w, h: the size of a one-line card (m); a two-line card grows downward, away from the record above it.
+// wrap: false keeps one line (crates: the tag sits above its record, close to the camera anyway).
+export function createTag({ w = 0.34, h = 0.1, wrap = true } = {}) {
+  const [c, g] = canvas(TAG_W, wrap ? TAG_H2 : TAG_H1);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), crisp({ map: tex, alphaTest: 0.4 }));
+  const h2 = wrap ? h * TAG_H2 / TAG_H1 : h;
+  const geo = new THREE.PlaneGeometry(w, h2).translate(0, -(h2 - h) / 2, 0);
+  const mesh = new THREE.Mesh(geo, crisp({ map: tex, alphaTest: 0.4 }));
   mesh.visible = false;
   let seq = 0;
   const tag = { mesh, ready: Promise.resolve() };
   tag.show = (item, seed = 3) => {
     const my = ++seq;
     mesh.visible = true;
-    tag.ready = fontReady.then(() => { if (my === seq) { drawTag(g, 640, 190, item, seed); tex.needsUpdate = true; } });
+    tag.ready = fontReady.then(() => { if (my === seq) { drawTag(g, item, seed, wrap); tex.needsUpdate = true; } });
   };
   tag.hide = () => { seq++; mesh.visible = false; mesh.removeFromParent(); };
   return tag;

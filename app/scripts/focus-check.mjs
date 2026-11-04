@@ -1,4 +1,5 @@
 // Still cursor over a few spots at a rack: does the hover hold and the camera settle, or do they chase?
+// Each sample is hovered:yaw:pivot px (the record the camera swings round should stay put on screen).
 //   node scripts/focus-check.mjs out_dir [rack]   (SPOTS="x,y x,y", CADENCE_PORT)
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
@@ -16,7 +17,7 @@ for (const [x, y] of spots) {
   await page.mouse.move(x - 30, y - 10); await page.mouse.move(x, y, { steps: 5 });
   const seq = [];
   for (let i = 0; i < 40; i++) {
-    seq.push(await page.evaluate(() => { const d = window.__cadenceDebug, f = d.focus; return `${d.rack.hovered}:${f.yaw.toFixed(2)}:${d.clear.x.toFixed(2)}`; }));
+    seq.push(await page.evaluate(() => { const d = window.__cadenceDebug, f = d.focus; const o = d.orbit; return `${d.rack.hovered}:${f.yaw.toFixed(2)}:${o.aimed >= 0 ? o.pivotPx.map(Math.round).join(',') : '-'}`; }));
     await page.waitForTimeout(150);
   }
   const hs = seq.map((s) => s.split(':')[0]);

@@ -207,7 +207,6 @@ export class Sleeve {
     // box faces: +x, -x, +y, -y (spine colour), +z (cover), -z (back: shows the art too, because
     // some racks are seen from behind)
     this.mesh = new THREE.Mesh(sleeveGeo(size, thick), [this.spineMat, this.spineMat, this.spineMat, this.spineMat, this.coverMat, this.coverMat]);
-    this.mesh.userData.sleeve = true; // sightline.js: records never count as scenery in the way
     this.mesh.castShadow = true;
     this.mesh.rotation.order = 'YXZ';
     this.mesh.visible = false;
@@ -495,73 +494,9 @@ function createPlayTracker() {
   };
 }
 
-// ---- screen keep-out ---------------------------------------------------------------------------
-
-// A box on screen (CSS px, e.g. the suitcase and its caption) that lifted records must not float
-// under. main.js sets it once: setScreenAvoid(() => rect | null, () => aimCamera).
-// Records never move to dodge it: the rack reports how far they would have to move on screen
-// (core.clearShift, metres along the view's right / up at the record) and main.js moves the camera
-// the other way (left, or down), so the records stay put in the room and the view makes room instead.
-// It is measured against the camera the view is heading to without that shift (cursor tilt plus the
-// hover focus turn's target): measured against the live camera, the shift would change its own measure.
-let avoidFn = null, avoidCamFn = null;
-export function setScreenAvoid(fn, cameraFn = null) { avoidFn = fn; avoidCamFn = cameraFn; }
-
-const _bb = new THREE.Box3(), _c = new THREE.Vector3(), _wp = new THREE.Vector3();
-const AVOID_MARGIN = 14;
-// How far a lifted sleeve (with its tag) must move to clear the box, both ways: out = { right, up } in
-// metres at the sleeve's depth (0 when it already clears). Scaled by how far it is lifted, so the camera
-// eases over as the record rises and back as it settles.
-function measureClear(s, camera, rect, out) {
-  out.right = out.up = 0;
-  s.mesh.updateWorldMatrix(true, true);
-  _bb.setFromObject(s.mesh);
-  if (_bb.isEmpty()) return false;
-  const W = innerWidth, H = innerHeight;
-  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-  for (let k = 0; k < 8; k++) {
-    _c.set(k & 1 ? _bb.max.x : _bb.min.x, k & 2 ? _bb.max.y : _bb.min.y, k & 4 ? _bb.max.z : _bb.min.z).project(camera);
-    if (_c.z > 1) return false; // behind the camera: leave it
-    const px = (_c.x + 1) / 2 * W, py = (1 - _c.y) / 2 * H;
-    x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
-  }
-  const m = AVOID_MARGIN;
-  if (x1 < rect.left - m || x0 > rect.right + m || y1 < rect.top - m || y0 > rect.bottom + m) return false;
-  s.mesh.getWorldPosition(_wp);
-  const depth = -_c.copy(_wp).applyMatrix4(camera.matrixWorldInverse).z;
-  if (depth <= 0) return false;
-  const perPx = (2 * depth * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) / H;
-  const L = s.lift, e = L * L * (3 - 2 * L);
-  out.right = Math.max(0, rect.right + m - x0) * perPx * e;
-  out.up = Math.max(0, y1 - (rect.top - m)) * perPx * e;
-  return true;
-}
-const _need = { right: 0, up: 0 };
-// The shift for all lifted sleeves together, in one direction. Sideways (camera left) is the rule:
-// dropping the camera lifts the records into the side menu. Only when sideways would need more than
-// the camera may move (CLEAR_MAX, as main.js clamps it) and up is shorter does it go up instead.
-export const CLEAR_MAX = 1.0;
-function clearShiftFor(core, camera, out) {
-  out.x = out.y = out.right = out.up = 0;
-  const rect = avoidFn?.();
-  if (!rect || !rect.width) return out;
-  let right = 0, up = 0, any = false;
-  for (const s of core.sleeves) {
-    if (s.lift < 0.01 || !s.mesh.visible) continue;
-    if (!measureClear(s, camera, rect, _need)) continue;
-    any = true;
-    right = Math.max(right, _need.right);
-    up = Math.max(up, _need.up);
-  }
-  if (!any) return out;
-  out.right = right; out.up = up; // both ways, for main.js when scenery blocks the chosen one
-  if (right > CLEAR_MAX && up < right) out.y = up; else out.x = right;
-  return out;
-}
-
 // ---- rack core ----------------------------------------------------------------------------------
 
-const _hc = new THREE.Raycaster(), _hb = new THREE.Box3();
+const _hc = new THREE.Raycaster(), _hb = new THREE.Box3(), _wp = new THREE.Vector3();
 // The hovered sleeve, if it is well lifted and the cursor is over it as it is now. Racks can list
 // more sleeves that count as held up (core.held, e.g. a fan of three): the nearest one under the cursor wins.
 function heldUnder(core, pointer, camera) {
@@ -597,7 +532,6 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
     shelf: null,
     camLocal: new THREE.Vector3(), // the camera in the root's space, refreshed before layout()
     play: createPlayTracker(),
-    clearShift: { x: 0, y: 0, right: 0, up: 0 },    // how far the lifted records would have to move to clear the suitcase (see measureClear)
   };
   if (core.sign) root.add(core.sign.mesh);
 
@@ -663,8 +597,6 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         root.worldToLocal(core.camLocal);
         def.layout(core, dt, camera, want);
         core.sleeves.forEach((s) => { s.mesh.visible = s.appear > 0 && !s.hidden; });
-        if (active) clearShiftFor(core, avoidCamFn?.() ?? camera, core.clearShift);
-        else core.clearShift.x = core.clearShift.y = core.clearShift.right = core.clearShift.up = 0;
         if (core.tag.mesh.parent) core.tag.mesh.scale.setScalar(0.6 + 0.4 * (core.sleeves[want]?.lift ?? 0));
       },
       // the item's art changed (repaired playlist cover): re-skin its sleeve(s) without re-laying out
@@ -686,7 +618,6 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
       },
       get hovered() { return core.hovered; },
       // metres the view should make room by (records move right = camera moves left; up = camera down)
-      get clearShift() { return core.clearShift; },
       // where the hovered record is now (world), for the camera to turn toward; false if none
       focusPoint(out) {
         const s = core.sleeves[core.hovered];

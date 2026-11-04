@@ -6,8 +6,7 @@ import { createWatercolour, renderOverlay } from './watercolour.js';
 import { createSky } from './sky.js';
 import { createTimeOfDay } from './timeofday.js';
 import { createRack } from './racks/index.js';
-import { setScreenAvoid, getCover, CLEAR_MAX } from './racks/common.js';
-import { measureRoom, fitShift } from './sightline.js';
+import { getCover } from './racks/common.js';
 import { STATIONS, HOME, assignShelves } from './stations.js';
 import { createNav, AT_HOME } from './nav.js';
 import { createMenu } from './menu.js';
@@ -42,25 +41,6 @@ scene.fog = new THREE.Fog('#f1cf9b', 18, 52);
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 120);
 const rig = new THREE.Group();
 rig.add(camera);
-// where the view is heading without the suitcase shift (cursor tilt + the focus turn's target): racks
-// measure in it how far the camera must move for lifted records to clear the suitcase (racks/common.js)
-const aimCam = camera.clone();
-rig.add(aimCam);
-// that shift, eased: the camera slides left (or down) instead of the records sliding away
-const CLEAR = { rate: 6, max: CLEAR_MAX };
-const clear = { x: 0, y: 0 };
-const clearT = { x: 0, y: 0 };
-// how far the camera may slide at each station before scenery (an upright, a wall) blocks the view;
-// measured the first time a station needs a slide (sightline.js)
-const rooms = new Map();
-let forceSlide = null; // __cadenceDebug.slide = { x, y }: pin the slide for checks
-function roomHere() {
-  const key = pinnedPose ? 'pin' : nav.settled && nav.at !== AT_HOME ? nav.at : null;
-  if (key === null) return null;
-  if (!rooms.has(key)) rooms.set(key, measureRoom(scene, rig, camera, { skip: [rig], max: CLEAR.max }));
-  return rooms.get(key);
-}
-const _shift = new THREE.Vector3();
 scene.add(rig);
 
 // Light: warm low sun for the street, soft sky fill. Interior lamps live in shop.js.
@@ -139,7 +119,6 @@ function ensureRack(i) {
 // the suitcase record player in the bottom-left corner (drawn in an overlay pass, subscribes to the player state itself)
 const suitcase = createPlayer({ renderer, painter, music, camera });
 // a hovered record never floats up underneath the suitcase or its caption
-setScreenAvoid(() => suitcase.avoidRect(), () => aimCam);
 const menu = createMenu({
   onGo: (i) => nav.go(i),
   onHome: () => nav.go(AT_HOME),
@@ -325,8 +304,11 @@ window.__cadenceDebug = {
   get stations() { return STATIONS.map((s, i) => ({ index: i, id: s.id, style: s.style, shelf: placed.get(i)?.title ?? null })); },
   get state() { return { phase: nav.phase, at: nav.at, settled: nav.settled, flying: nav.flying, progress: nav.progress, introDone: nav.introDone, sections: nav.sections }; },
   get focus() { return { ...focus }; },
-  set slide(v) { forceSlide = v; },
-  get clear() { return { ...clear, target: { ...clearT }, room: roomHere(), camera: camera.position.toArray() }; },
+  // the swing about the hovered record; pivotPx = where the pivot is on screen (it should not move)
+  get orbit() {
+    const v = rig.localToWorld(focus.pivot.clone()).project(camera);
+    return { yaw: focus.yaw, pitch: focus.pitch, aimed: focus.aimed, pivotPx: [(v.x + 1) / 2 * innerWidth, (1 - v.y) / 2 * innerHeight] };
+  },
   go: (i) => nav.go(i),
   home: () => nav.go(AT_HOME),
   jump: (i) => nav.jump(i),
@@ -348,17 +330,24 @@ addEventListener('pointermove', (e) => {
 let pointerMovedAt = 0;
 const pointerPx = { x: 0, y: 0 };
 
-// ---- the camera turns toward the record you are on ----
-// At a rack, once the cursor has rested on a record for a moment, the camera eases about halfway
-// toward centring it, so the record you are about to click is in front of you rather than off at the
-// edge with the cursor on the rack behind it.
-// Only the cursor changes what is hovered: whenever the camera starts a turn (toward a record, or back
-// when you leave the records), the hover is frozen until the cursor actually moves. Otherwise the turn
-// slides a different record under a still cursor, the camera turns to that one, and so on.
-// The aim is taken once per record (where it sits when the turn starts), not chased every frame.
+// ---- the camera swings round the record you are on ----
+// At a rack, once the cursor has rested on a record for a moment, the camera orbits about that record
+// (turns and moves together, pivoting on it) about halfway toward facing it head-on. Pivoting on the
+// record keeps it on the same spot on screen, so it stays under the cursor; only the room around it
+// swings. The camera never slides left / right / up / down on its own.
+// Only the cursor changes what is hovered: whenever the camera starts a swing (toward a record, or back
+// when you leave the records), the hover is frozen until the cursor actually moves. Otherwise the swing
+// moves a neighbouring record under a still cursor, the camera swings to that one, and so on.
+// The pivot is taken once per record (where it sits when the swing starts), not chased every frame.
 const FOCUS = { dwell: 0.12, rest: 0.08, share: 0.5, maxYaw: 0.2, maxPitch: 0.12, rate: 5, release: 0.8, unfreezePx: 4 };
-const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, key: -1, aimed: -1, rack: -1, on: 0, off: 0, freeze: null };
+const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, key: -1, aimed: -1, rack: -1, on: 0, off: 0, freeze: null,
+  pivot: new THREE.Vector3(), // rig-local point the camera orbits about
+  // the camera's pose in the rig without the cursor tilt; each frame's step of the swing is applied to it
+  // as a rotation about the pivot, so the pivot stays put on screen even when it changes mid-swing
+  offP: new THREE.Vector3(), offQ: new THREE.Quaternion() };
 const _fp = new THREE.Vector3();
+const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
+const orbitQ = (yaw, pitch, out) => out.setFromEuler(_e.set(pitch, yaw, 0));
 function aimAt(yaw, pitch, key) {
   if (Math.abs(yaw - focus.tyaw) + Math.abs(pitch - focus.tpitch) < 0.01) return;
   focus.tyaw = yaw; focus.tpitch = pitch;
@@ -383,20 +372,37 @@ function updateFocus(dt) {
     rig.worldToLocal(_fp);
     const yaw = Math.atan2(-_fp.x, -_fp.z), pitch = Math.atan2(_fp.y, Math.hypot(_fp.x, _fp.z));
     focus.aimed = hov;
-    aimAt(THREE.MathUtils.clamp(yaw * FOCUS.share, -FOCUS.maxYaw, FOCUS.maxYaw),
-      THREE.MathUtils.clamp(pitch * FOCUS.share, -FOCUS.maxPitch, FOCUS.maxPitch), hov);
+    // swing the sightline to the record back toward straight ahead (the rack faces the station view):
+    // the camera turns away from the record while moving round in front of it
+    const ty = THREE.MathUtils.clamp(-yaw * FOCUS.share, -FOCUS.maxYaw, FOCUS.maxYaw);
+    const tp = THREE.MathUtils.clamp(-pitch * FOCUS.share, -FOCUS.maxPitch, FOCUS.maxPitch);
+    focus.pivot.copy(_fp); // swings go step by step about the pivot, so a new pivot never jumps
+    aimAt(ty, tp, hov);
   } else if (hov < 0 && focus.off > FOCUS.release && focus.aimed !== -1) {
     focus.aimed = -1;
     aimAt(0, 0, -1);
   }
   const k = 1 - Math.exp(-dt * FOCUS.rate);
+  if (focus.aimed === -1) {
+    // no record to keep under the cursor: ease straight home (undoes any drift between pivots)
+    focus.yaw += (0 - focus.yaw) * k; focus.pitch += (0 - focus.pitch) * k;
+    focus.offP.multiplyScalar(1 - k);
+    focus.offQ.slerp(_qa.identity(), k);
+    return finishFocus(rack);
+  }
+  // this frame's step of the swing, as a rotation about the pivot
+  orbitQ(focus.yaw, focus.pitch, _qa).invert();
   focus.yaw += (focus.tyaw - focus.yaw) * k;
   focus.pitch += (focus.tpitch - focus.pitch) * k;
+  orbitQ(focus.yaw, focus.pitch, _qb).multiply(_qa); // step = R(new) * R(old)^-1
+  focus.offP.sub(focus.pivot).applyQuaternion(_qb).add(focus.pivot);
+  focus.offQ.premultiply(_qb);
+  finishFocus(rack);
+}
+function finishFocus(rack) {
   if (hoverArg === null) for (const r of racks) if (r) r.forceHover = r === rack && focus.freeze ? focus.freeze.key : null;
 }
 document.addEventListener('pointerleave', () => { pointer = null; cursorX01 = null; });
-// the rack whose lifted records the camera makes room for (a pinned ?cam counts as the table, like ?hover)
-const currentShiftRack = () => (pinnedPose ? racks[nav.at === AT_HOME ? 0 : nav.at] : currentRack());
 const currentRack = () => (nav.settled && nav.at !== AT_HOME ? racks[nav.at] : null);
 // any click during the intro skips to home
 addEventListener('pointerdown', () => { if (nav.intro) nav.skipIntro(curT); });
@@ -475,28 +481,10 @@ function frame(t, dtOverride, draw = true) {
   tilt.y += (tilt.ty - tilt.y) * 0.06;
   // gentle tilt at home, calmer at a rack so records stay put under the cursor
   const k = nav.tilt;
-  camera.rotation.order = 'YXZ';
   updateFocus(dt);
-  camera.rotation.set(-tilt.y * 0.09 * k + focus.pitch, -tilt.x * 0.2 * k + focus.yaw, 0);
-  aimCam.rotation.order = 'YXZ';
-  aimCam.rotation.set(-tilt.y * 0.09 * k + focus.tpitch, -tilt.x * 0.2 * k + focus.tyaw, 0);
-  // the rack you are at says how far its lifted records would need to move (last frame's measure)
-  const shiftRack = currentShiftRack();
-  const want = shiftRack?.clearShift;
-  fitShift(want, want && (want.x || want.y) ? roomHere() : null, CLEAR.max, clearT);
-  if (forceSlide) { clearT.x = forceSlide.x ?? 0; clearT.y = forceSlide.y ?? 0; }
-  // while the camera slides, the hover stays on the record it slides for (as during a focus turn):
-  // otherwise the slide puts another record under a still cursor, that one needs its own slide, and so on
-  const sliding = Math.abs(clearT.x - clear.x) + Math.abs(clearT.y - clear.y) > 0.01;
-  if (sliding && hoverArg === null && shiftRack && shiftRack === currentRack() && !focus.freeze) {
-    focus.freeze = { key: shiftRack.hovered, x: pointerPx.x, y: pointerPx.y };
-    shiftRack.forceHover = focus.freeze.key;
-  }
-  const kc = 1 - Math.exp(-dt * CLEAR.rate);
-  clear.x += (clearT.x - clear.x) * kc;
-  clear.y += (clearT.y - clear.y) * kc;
-  // records right on screen = camera left; records up = camera down (in the view's own frame)
-  camera.position.copy(_shift.set(-clear.x, -clear.y, 0).applyQuaternion(aimCam.quaternion));
+  // the swing about the hovered record, then the cursor tilt on top
+  camera.position.copy(focus.offP);
+  camera.quaternion.copy(focus.offQ).multiply(_qa.setFromEuler(_e.set(-tilt.y * 0.09 * k, -tilt.x * 0.2 * k, 0)));
   rig.updateMatrixWorld();
 
   // ?hover=N holds record N up on the rack you are at (a pinned ?cam counts as the table)
@@ -533,9 +521,6 @@ addEventListener('resize', () => {
   painter?.setSize();
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  aimCam.aspect = camera.aspect;
-  aimCam.updateProjectionMatrix();
-  rooms.clear();
 });
 
 // Deterministic time for screenshots: ?shot, then window.__seek(seconds).

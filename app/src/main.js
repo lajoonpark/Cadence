@@ -347,7 +347,12 @@ const pointerPx = { x: 0, y: 0 };
 // when you leave the records), the hover is frozen until the cursor actually moves. Otherwise the swing
 // moves a neighbouring record under a still cursor, the camera swings to that one, and so on.
 // The pivot is taken once per record (where it sits when the swing starts), not chased every frame.
-const FOCUS = { dwell: 0.03, share: 0.35, maxYaw: 0.14, maxPitch: 0.09, omega: 11, rate: 6, settle: 2, release: 0.35, unfreezePx: 4 };
+// Zoom: the camera moves in toward the hovered record along the line to it (so the record stays under
+// the cursor and just grows, its words readable), to about zoomTo metres from it, but never more than
+// zoomMax of the way (far racks like the tall bookshelf get the most; the close trough barely moves).
+// zoomRate: how quickly it gets there.
+const FOCUS = { dwell: 0.03, share: 0.35, maxYaw: 0.14, maxPitch: 0.09, omega: 11, rate: 6, settle: 2, release: 0.35, unfreezePx: 4,
+  zoomTo: 1.6, zoomMax: 0.5, zoomRate: 4 };
 const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, vyaw: 0, vpitch: 0, key: -1, aimed: -1, rack: -1, on: 0, off: 0, freeze: null,
   pivot: new THREE.Vector3(), // rig-local point the camera orbits about
   // the camera's pose in the rig without the cursor tilt; each frame's step of the swing is applied to it
@@ -415,12 +420,16 @@ function updateFocus(dt) {
   // after 30 records). The settled pose for this pivot and angle is p = pivot - R * pivot (same distance
   // to the record as the rig has). Keep the distance to the pivot exact (sliding along the line to the
   // pivot does not move it on screen) and ease the small sideways rest toward that pose.
-  const k2 = 1 - Math.exp(-dt * FOCUS.settle);
+  // Zoomed in, the settled pose is the same turn but nearer: p = pivot - R * pivot * near. The
+  // distance to the pivot eases toward that (a new record mid-zoom bends it instead of jumping).
+  const k2 = 1 - Math.exp(-dt * FOCUS.settle), kz = 1 - Math.exp(-dt * FOCUS.zoomRate);
+  const near = THREE.MathUtils.clamp(FOCUS.zoomTo / focus.pivot.length(), 1 - FOCUS.zoomMax, 1);
   orbitQ(focus.yaw, focus.pitch, _qa);
-  _fp.copy(focus.pivot).applyQuaternion(_qa).negate().add(focus.pivot);
+  _fp.copy(focus.pivot).applyQuaternion(_qa).multiplyScalar(-near).add(focus.pivot);
+  const dist = focus.offP.distanceTo(focus.pivot);
   focus.offP.lerp(_fp, k2);
   focus.offQ.slerp(_qa, k2);
-  focus.offP.sub(focus.pivot).setLength(focus.pivot.length()).add(focus.pivot);
+  focus.offP.sub(focus.pivot).setLength(dist + (focus.pivot.length() * near - dist) * kz).add(focus.pivot);
   finishFocus(rack);
 }
 function finishFocus(rack) {

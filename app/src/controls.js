@@ -189,6 +189,9 @@ const TAG_CSS = `
 .cad-tag { position: fixed; z-index: 2; pointer-events: none; opacity: 0; transition: opacity .9s ease; user-select: none;
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-family: ${FONT}; }
 .cad-tag.show { opacity: 1; }
+.cad-tag.shop { transition: opacity .9s ease, transform .35s ease; }
+.cad-tag.shop.show.tucked { opacity: 0; transform: translateY(28px); transition: opacity .3s ease, transform .35s ease; pointer-events: none; }
+.cad-tag.shop.tucked .cap, .cad-tag.shop.tucked button { pointer-events: none; }
 .cad-tag.shop { left: 27vw; bottom: 3.4vh; width: max-content; max-width: min(34vw, 440px);
   perspective: 900px; }   /* the player docks it beside the case with dock() */
 .cad-tag.shop > .turn { transform-origin: 0% 50%; will-change: transform; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 100%; }
@@ -264,6 +267,8 @@ export function createCaption({ parent = document.body, variant = 'shop', onSeek
       if (instant) root.style.transition = 'none';
       root.classList.toggle('show', on);
     },
+    // Out of the way while the suitcase is tucked down (fades and drops a little).
+    tuck(on) { root.classList.toggle('tucked', on); },
     // Pin the tag beside the suitcase: CSS px from the left and the bottom of the view.
     dock({ left, bottom, maxWidth }) {
       root.style.left = `${Math.round(left)}px`;

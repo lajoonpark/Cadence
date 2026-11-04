@@ -10,6 +10,9 @@
 //   player.show(on, instant)       fades the caption in and flicks the lid open the first time
 //   player.receive(disc)           a record was picked: { matrixWorld, cover } (see racks/)
 //   player.dispense(cover)         a song with no sleeve (search): the disc machine pops up and spits the record out
+//   player.tuck(on)                at a rack: tuck the case away (lid shuts, it sinks into the corner) so it never
+//                                  covers records; it comes back up while the cursor is near it or a record flies in
+//   player.wake(s)                 come up now and stay up s seconds (a pick: the record is about to fly in)
 //   player.over                    true while the pointer is over the case (keep racks from hovering through it)
 //   player.avoidRect()             the case and its caption as a box on screen in CSS px, for the section menu to keep clear of
 import * as THREE from 'three';
@@ -30,6 +33,10 @@ const PITCH = 0.5;     // tips the deck towards the viewer; with the off-axis vi
 const WIDTH = { share: 0.235, min: 260, max: 420 };
 const TOP_LIMIT = 0.5;
 const GAP = 14;        // between the case and its caption
+// Tucked away: the lid shuts first, then the case sinks until only a strip of the closed case peeks up
+// from the bottom edge (sink = share of the open case's height on screen). It wakes when the cursor
+// comes near it (the strip, or the whole case while it is up) and whenever a record is on its way in.
+const TUCK = { delay: 0.35, shutFirst: 0.3, sink: 0.62, rate: 8, margin: 0.06, hold: 0.9 };
 
 export function createPlayer({ renderer, painter, music, camera }) {
   const scene = new THREE.Scene();
@@ -55,6 +62,8 @@ export function createPlayer({ renderer, painter, music, camera }) {
   let aspect = 0, fov = 0, viewH = 0;
   let box = { x0: -1, x1: -0.6, y0: -0.9, y1: -0.4 };     // the case's wanted box, NDC
   let caseRect = null;                                     // where it ended up, CSS px
+  let caseNdc = { x0: -1, x1: -0.6, y0: -0.9, y1: -0.4 };  // the same in NDC (lid open, not sunk)
+  let baseY = 0, sinkWorld = 0;                            // the fitted height in camera space, and how far a full tuck lowers it
   const centre = new THREE.Vector2();
   function layout() {
     const W = renderer.domElement.clientWidth || innerWidth, H = renderer.domElement.clientHeight || innerHeight;
@@ -68,6 +77,9 @@ export function createPlayer({ renderer, painter, music, camera }) {
     centre.set((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2);
     aspect = camera.aspect; fov = camera.fov; viewH = H;
     const b = ndcBounds(points, place, ocam);
+    caseNdc = b;
+    baseY = place.position.y;
+    sinkWorld = (b.y1 - b.y0) * TUCK.sink * Math.tan(THREE.MathUtils.degToRad(ocam.fov) / 2) * -place.position.z;
     caseRect = {
       left: ((b.x0 + 1) / 2) * W, right: ((b.x1 + 1) / 2) * W,
       top: ((1 - b.y1) / 2) * H, bottom: ((1 - b.y0) / 2) * H,
@@ -99,13 +111,13 @@ export function createPlayer({ renderer, painter, music, camera }) {
     pointer = toNdc(e).clone();
     if (!shown) return;
     if (suitcase.dragging) { suitcase.pointerDrag(ndc, ocam); cursor(); return; }
-    if (!onCanvasLast) { suitcase.hover(null); over = false; return; }
+    if (!onCanvasLast || sunk > 0.3) { suitcase.hover(null); over = false; return; }
     over = suitcase.hover(ndc, ocam).over;
     cursor();
   }, true);
   addEventListener('pointerdown', (e) => {
     swallowClick = false;      // a drag that ended elsewhere never produced a click
-    if (!shown || !onCanvas(e)) return;
+    if (!shown || !onCanvas(e) || sunk > 0.3) return;
     if (suitcase.pointerDown(toNdc(e), ocam)) { swallowClick = true; e.stopPropagation(); }
     cursor();
   }, true);
@@ -121,6 +133,32 @@ export function createPlayer({ renderer, painter, music, camera }) {
     e.stopPropagation();
   }, { capture: true, passive: true });
 
+  // ---- tucking away ----
+  let tuckWanted = false, away = 0, hold = 0, sunk = 0, lidShut = false;
+  function near() {
+    if (!pointer) return false;
+    const m = TUCK.margin, b = caseNdc;
+    if (pointer.x < b.x0 - m || pointer.x > b.x1 + m) return false;
+    // while up: anywhere over the case; while down: only the strip that peeks up
+    const top = b.y1 - (b.y1 - b.y0) * TUCK.sink * Math.min(1, sunk * 1.5);
+    return pointer.y < top + m;
+  }
+  function tuckStep(dt) {
+    if (flights.active || machine.active) hold = TUCK.hold; else hold = Math.max(0, hold - dt);
+    const wake = !tuckWanted || !shown || hold > 0 || suitcase.dragging || near();
+    away = wake ? 0 : away + dt;
+    const tucking = away > TUCK.delay;
+    if (tucking && !lidShut) { lidShut = true; suitcase.close(); }
+    // down only once the lid has had time to shut; back up first, then the lid opens
+    const target = tucking && away > TUCK.delay + TUCK.shutFirst ? 1 : 0;
+    sunk += (target - sunk) * (1 - Math.exp(-dt * TUCK.rate));
+    if (Math.abs(target - sunk) < 1e-3) sunk = target;
+    if (!tucking && lidShut && sunk < 0.35 && opened) { lidShut = false; suitcase.open(); }
+    const e = sunk * sunk * (3 - 2 * sunk);
+    place.position.y = baseY - sinkWorld * e;
+    caption.tuck(e > 0.05);
+  }
+
   let lastWall = performance.now();
   function update(dt, t) {
     // wall-clock step: a slow frame must not stretch a flight (the record would hang in mid-air under software rendering)
@@ -133,6 +171,7 @@ export function createPlayer({ renderer, painter, music, camera }) {
       suitcase.lean((pointer.x - centre.x) / 1.6, -(pointer.y - centre.y) / 1.3);
       caption.tilt(pointer.x, -pointer.y);
     }
+    tuckStep(dt);
     suitcase.update(dt);
     machine.update(dt);
     flights.update(dt);
@@ -167,6 +206,9 @@ export function createPlayer({ renderer, painter, music, camera }) {
       const right = Math.max(caseRect.right, c?.right ?? 0), top = Math.min(caseRect.top, c?.top ?? Infinity);
       return { left, right, top, bottom, width: right - left, height: bottom - top, x: left, y: top };
     },
+    tuck(on) { tuckWanted = on; },
+    wake(seconds = 2.5) { hold = Math.max(hold, seconds); },
+    get tucked() { return sunk; },
     get over() { return over || suitcase.dragging; },
     get flying() { return flights.active; },
     flightDuration: flights.duration,

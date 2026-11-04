@@ -304,6 +304,8 @@ window.__cadenceDebug = {
   get stations() { return STATIONS.map((s, i) => ({ index: i, id: s.id, style: s.style, shelf: placed.get(i)?.title ?? null })); },
   get state() { return { phase: nav.phase, at: nav.at, settled: nav.settled, flying: nav.flying, progress: nav.progress, introDone: nav.introDone, sections: nav.sections }; },
   get focus() { return { ...focus }; },
+  get camOffset() { return focus.offP.toArray(); },
+  get tucked() { return suitcase.tucked; },
   // the swing about the hovered record; pivotPx = where the pivot is on screen (it should not move)
   get orbit() {
     const v = rig.localToWorld(focus.pivot.clone()).project(camera);
@@ -339,7 +341,7 @@ const pointerPx = { x: 0, y: 0 };
 // when you leave the records), the hover is frozen until the cursor actually moves. Otherwise the swing
 // moves a neighbouring record under a still cursor, the camera swings to that one, and so on.
 // The pivot is taken once per record (where it sits when the swing starts), not chased every frame.
-const FOCUS = { dwell: 0.12, rest: 0.08, share: 0.5, maxYaw: 0.2, maxPitch: 0.12, rate: 5, release: 0.8, unfreezePx: 4 };
+const FOCUS = { dwell: 0.12, rest: 0.08, share: 0.5, maxYaw: 0.2, maxPitch: 0.12, rate: 5, settle: 1.5, release: 0.8, unfreezePx: 4 };
 const focus = { yaw: 0, pitch: 0, tyaw: 0, tpitch: 0, key: -1, aimed: -1, rack: -1, on: 0, off: 0, freeze: null,
   pivot: new THREE.Vector3(), // rig-local point the camera orbits about
   // the camera's pose in the rig without the cursor tilt; each frame's step of the swing is applied to it
@@ -397,6 +399,17 @@ function updateFocus(dt) {
   orbitQ(focus.yaw, focus.pitch, _qb).multiply(_qa); // step = R(new) * R(old)^-1
   focus.offP.sub(focus.pivot).applyQuaternion(_qb).add(focus.pivot);
   focus.offQ.premultiply(_qb);
+  // Steps about different pivots do not cancel out: going record to record, each pair left a little
+  // shift, mostly along the sightline, so the camera crept further back the longer you hovered (1.8 m
+  // after 30 records). The settled pose for this pivot and angle is p = pivot - R * pivot (same distance
+  // to the record as the rig has). Keep the distance to the pivot exact (sliding along the line to the
+  // pivot does not move it on screen) and ease the small sideways rest toward that pose.
+  const k2 = 1 - Math.exp(-dt * FOCUS.settle);
+  orbitQ(focus.yaw, focus.pitch, _qa);
+  _fp.copy(focus.pivot).applyQuaternion(_qa).negate().add(focus.pivot);
+  focus.offP.lerp(_fp, k2);
+  focus.offQ.slerp(_qa, k2);
+  focus.offP.sub(focus.pivot).setLength(focus.pivot.length()).add(focus.pivot);
   finishFocus(rack);
 }
 function finishFocus(rack) {
@@ -406,7 +419,8 @@ document.addEventListener('pointerleave', () => { pointer = null; cursorX01 = nu
 const currentRack = () => (nav.settled && nav.at !== AT_HOME ? racks[nav.at] : null);
 // any click during the intro skips to home
 addEventListener('pointerdown', () => { if (nav.intro) nav.skipIntro(curT); });
-renderer.domElement.addEventListener('click', () => { if (!nav.intro) { shadowsBusy(1.5); currentRack()?.click(); } });
+// a pick wakes the tucked suitcase straight away, so it is up with the lid open before the record arrives
+renderer.domElement.addEventListener('click', () => { if (!nav.intro) { shadowsBusy(1.5); if (currentRack()?.click()) suitcase.wake(); } });
 
 // ---- keys ----
 // Space play/pause, arrows back/skip and volume, L like, Tab / Shift+Tab next / previous section,
@@ -503,6 +517,7 @@ function frame(t, dtOverride, draw = true) {
   });
 
   const ui = nav.introDone || !!pinnedPose;
+  suitcase.tuck(!!currentRack() && !pinnedPose); // at a rack the case tucks down out of the records' way
   suitcase.show(ui, shotMode); // the lid flicks open the first time, when the intro reaches home
   suitcase.update(dt, t);
   menu.show(ui, shotMode);

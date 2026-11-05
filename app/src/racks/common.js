@@ -53,6 +53,23 @@ export const SLEEVE = 0.31;
 export const THICK = 0.014;
 export const smooth = (rate, dt) => 1 - Math.exp(-rate * dt);
 export const clamp01 = (t) => Math.min(1, Math.max(0, t));
+// A spring toward `target` on obj[key] (velocity kept in obj[key + 'V']): soft start, no first-frame
+// jump. z < 1 overshoots a little (lively), z = 1 settles without overshoot. `floor` clamps the low end
+// (a record must never sink into its slot). Sub-stepped so it stays stable at low frame rates.
+export function springTo(obj, key, target, dt, w, z = 1, floor = -Infinity) {
+  const vk = key + 'V';
+  let x = obj[key] ?? 0, v = obj[vk] ?? 0;
+  const h = Math.min(dt, 1 / 30), n = Math.max(1, Math.ceil(h * 120));
+  for (let i = 0; i < n; i++) {
+    const st = h / n;
+    v += (w * w * (target - x) - 2 * z * w * v) * st;
+    x += v * st;
+  }
+  if (dt > 1 / 30) x += (target - x) * (1 - Math.exp(-14 * (dt - 1 / 30))); // a big hitch: catch up
+  if (x < floor) { x = floor; v = Math.max(0, v); }
+  obj[key] = x; obj[vk] = v;
+  return x;
+}
 export const easeOut = (t) => 1 - Math.pow(1 - clamp01(t), 3);
 export const fontReady = (typeof document !== 'undefined' && document.fonts?.load(`64px ${FONT}`).catch(() => {})) || Promise.resolve();
 
@@ -262,6 +279,9 @@ const sleeveGeo = (size, thick) => {
 
 // How far the vinyl is slid up (in a 0.31 m sleeve): peeking while hovered, completely clear to pick.
 const DISC_HOVER = 0.11, DISC_OUT = 0.31;
+// lift spring: angular frequency (1/s) and damping. Critically damped both ways: any overshoot carries
+// the record past its hover pose along the curve, into the spinner post (scripts/pass-check.mjs)
+const LIFT_W = 19, LIFT_Z = 1, LIFT_W_DOWN = 21;
 
 export class Sleeve {
   constructor(item, index, { size = SLEEVE, thick = THICK, seed = index } = {}) {
@@ -270,7 +290,7 @@ export class Sleeve {
     this.size = size;
     this.thick = thick;
     this.seed = seed;
-    this.lift = 0; this.peek = 0; this.bump = 0; this.appear = 0; this.drop = 1;
+    this.lift = 0; this.liftV = 0; this.peek = 0; this.bump = 0; this.appear = 0; this.drop = 1;
     this.empty = false;      // the vinyl is away (playing / being picked)
     this.hot = false;
     this.art = item.art;
@@ -349,16 +369,20 @@ export class Sleeve {
   }
 
   step(dt, hovered) {
-    const k = smooth(14, dt);
     this.appear = Math.min(1, this.appear + dt * 2.4);
     this.drop = 1 - easeOut(this.appear);
-    this.lift += ((hovered ? 1 : 0) - this.lift) * k;
+    // lift is a spring, not an exponential chase: it starts soft (no jump on the first frame), gets
+    // there about as fast, and lands softly, with no overshoot. Down is a touch quicker
+    // and clamped at 0 so a record never sinks into its slot.
+    springTo(this, 'lift', hovered ? 1 : 0, dt, hovered ? LIFT_W : LIFT_W_DOWN, hovered ? LIFT_Z : 1, 0);
     this.peek += ((this.empty ? 1 : 0) - this.peek) * smooth(10, dt);
     this.bump = Math.max(0, this.bump - dt * 3);
     if (!this.hot && hovered) this.setHot(true);
     else if (this.hot && !hovered && this.lift < 0.02) this.setHot(false);
     if (this.empty && !this.picking) return;
-    const target = this.picking ? DISC_OUT : DISC_HOVER * this.lift;
+    // the vinyl peeks only once the sleeve is nearly up (one move after the other, not both at once)
+    const peekL = Math.min(1, Math.max(0, (this.lift - 0.7) / 0.3));
+    const target = this.picking ? DISC_OUT : DISC_HOVER * peekL * peekL * (3 - 2 * peekL);
     this.discY += (target - this.discY) * smooth(this.picking ? 22 : 12, dt);
     this.discDirNow.lerp(this.discDir, smooth(this.picking ? 20 : 12, dt)).normalize();
     this.disc.position.set(this.discDirNow.x, this.discDirNow.y, 0).multiplyScalar(this.discY * (this.size / SLEEVE));
@@ -722,9 +746,12 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         def.layout(core, dt, camera, want);
         // the hovered record's vinyl: which way is clear, in the pose it is in now (re-checked as it lifts)
         const hs = core.sleeves[want];
-        if (hs && !hs.empty && !hs.picking && (hs.clearT -= dt) <= 0) {
-          hs.clearT = hs.lift > 0.97 ? 0.6 : 0.12;
+        // the way is only re-picked while the vinyl is still inside the sleeve, so it never swings round
+        // mid-slide; it is first picked as the sleeve nears its hover pose (where it will slide)
+        if (hs && !hs.empty && !hs.picking && hs.discY < 0.005 && hs.lift > 0.6 && (hs.clearT -= dt) <= 0) {
+          hs.clearT = 0.15;
           hs.discDir.copy(chooseDiscDir(core, hs));
+          hs.discDirNow.copy(hs.discDir);
         }
         core.sleeves.forEach((s) => { s.mesh.visible = s.appear > 0 && !s.hidden; });
         if (core.tag.mesh.parent) core.tag.mesh.scale.setScalar(0.6 + 0.4 * (core.sleeves[want]?.lift ?? 0));
@@ -742,7 +769,8 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         if (!s || s.empty || s.picking) return false;
         const i = core.hovered;
         s.bump = 1;
-        s.discDir.copy(chooseDiscDir(core, s));
+        // keep the way it is already peeking if that is clear enough; a fresh pick only when not out yet
+        if (s.discY < 0.005) { s.discDir.copy(chooseDiscDir(core, s)); s.discDirNow.copy(s.discDir); }
         core.play.picked(s.item);
         s.startPick((disc) => onPick?.(s.item, i, disc));
         return true;

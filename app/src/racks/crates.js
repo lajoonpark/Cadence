@@ -279,7 +279,7 @@ export function createCratesRack({ onPick }) {
 // rp/rq: the pose in the crate (changed in place), fp/fq: the floating pose, fl: 0..1 along the way.
 const _up = new THREE.Vector3(), _d = new THREE.Vector3();
 function outThenFloat(rp, rq, fp, fq, fl) {
-  const up = ss(fl / 0.4), go = ss((fl - 0.3) / 0.7);
+  const up = ss(fl / 0.4), go = ss((fl - 0.24) / 0.76);
   _up.copy(rp);
   _up.y += (SLEEVE + 0.08) * up;
   // across first, toward you last: the records rise one behind the other, so they part sideways before

@@ -4,7 +4,7 @@
 // paper tag with the name. Click to play it.
 import * as THREE from 'three';
 import { rng } from '../rand.js';
-import { createRackCore, addBox, WOOD, SLEEVE, THICK, smooth } from './common.js';
+import { createRackCore, addBox, WOOD, SLEEVE, THICK, springTo } from './common.js';
 
 export const RACK_POS = new THREE.Vector3(0, 0, -5.6);
 const TABLE_H = 0.78;
@@ -71,7 +71,6 @@ export function createTroughRack({ onPick }) {
 
     layout(c, dt, camera, hovered) {
       const n = c.sleeves.length;
-      const kPush = smooth(10, dt);
       if (hovered < 0) fan = -1;            // cursor off the rack (or the rack not active)
       else if (fan < 0 || fan >= n) fan = hovered; // held by ?hover= for screenshots
       // the fan: three neighbours around the anchor, kept inside the row
@@ -83,7 +82,7 @@ export function createTroughRack({ onPick }) {
       const fanX = first < 0 ? 0 : members.reduce((a, j) => a + c.sleeves[j].x, 0) / members.length;
       c.sleeves.forEach((s, i) => {
         const inFan = members.includes(i);
-        s.fanA = (s.fanA ?? 0) + ((inFan ? 1 : 0) - (s.fanA ?? 0)) * kPush;
+        springTo(s, 'fanA', inFan ? 1 : 0, dt, inFan ? 15 : 18, inFan ? 0.8 : 1, 0);
         s.held = s.fanA;
         const k = inFan ? i - centre : 0;
         if (inFan) s.slot = k;
@@ -97,7 +96,7 @@ export function createTroughRack({ onPick }) {
         // then it turns, steps forward and settles into the fan; down the same way
         // (the three spread apart and step forward before they turn and settle, so they never turn into each
         // other or come down onto the row)
-        const up = ss(F / 0.4), spread = ss((F - 0.3) / 0.35), T = ss((F - 0.45) / 0.55);
+        const up = ss(F / 0.45), spread = ss((F - 0.25) / 0.42), T = ss((F - 0.4) / 0.6); // overlapping, so it never stops between steps
         const fanY = LIFT * (1 - 0.12 * Math.abs(slot));
         m.position.set(
           (s.x + s.pushed) * (1 - spread) + fx * spread,

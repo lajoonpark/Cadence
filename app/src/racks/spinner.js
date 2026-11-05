@@ -135,7 +135,7 @@ export function createSpinnerRack({ onPick }) {
         // above, so its vinyl has room to slide out), then toward you and turning
         xp.copy(rp).addScaledVector(s.d, PULL);
         popNear(pp, xp, cam, fw, 0.88);
-        const T = stagePath(_p, L, rp, xp, pp);
+        const T = stagePath(_p, L, rp, xp, pp, { split: 0.75 }); // far out before the bend: the post is right behind
         rp.copy(_p);
         const e2 = T;
         rp.y += s.drop * 0.7;

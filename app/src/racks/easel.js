@@ -101,7 +101,7 @@ export function createEaselRack({ onPick }) {
       const next = id === 0 ? page - 1 : page + 1;
       if (next < 0 || next >= pages) return;
       page = next;
-      c.sleeves.forEach((s) => { s.lift = 0; });
+      c.sleeves.forEach((s) => { s.lift = 0; s.liftV = 0; });
       place(c, true);
     },
 

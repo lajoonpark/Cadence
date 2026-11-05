@@ -14,6 +14,7 @@ import { createMenu } from './menu.js';
 import { createSearch } from './search.js';
 import { createSettingsPanel } from './settings-panel.js';
 import { settings } from './settings.js';
+import { createPacer } from './pacer.js';
 import { createMusic } from './music.js';
 import { createPlayer } from './suitcase/player.js';
 import { startSong } from './suitcase.js';
@@ -310,6 +311,7 @@ music.onSignedIn(loadShelves);
 // for tests and the devtools console
 window.__cadenceDebug = {
   renderer,
+  get pacer() { return pacer; },
   camera,
   // ms per render step, GPU work included (each step waits for the GPU); shadows: also redraw the shadow map
   profile({ shadows = false, runs = 3 } = {}) {
@@ -620,6 +622,19 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
 });
 
+// ---- frame pacing (see pacer.js): full rate only while something moves ----
+let pacer = null;
+const camWas = new THREE.Matrix4();
+function watchCamera() {
+  // the camera still easing (cursor tilt, hover orbit, zoom) counts as movement
+  const a = camera.matrixWorld.elements, b = camWas.elements;
+  for (let i = 0; i < 16; i++) if (Math.abs(a[i] - b[i]) > 1e-5) { pacer?.kick(); break; }
+  camWas.copy(camera.matrixWorld);
+}
+for (const ev of ['pointermove', 'pointerdown', 'pointerup', 'wheel', 'keydown', 'keyup']) addEventListener(ev, () => pacer?.kick(), { passive: true, capture: true });
+document.addEventListener('pointerleave', () => pacer?.kick());
+for (const k of ['paint', 'covers', 'fps', 'maxFps']) settings.on(k, () => pacer?.kick());
+
 // Deterministic time for screenshots: ?shot, then window.__seek(seconds).
 if (shotMode) {
   // let shelves, covers and fonts arrive, then settle all animation (big dt) before the frame is captured
@@ -669,6 +684,13 @@ if (shotMode) {
   ]);
   Promise.race([warmed, new Promise((r) => setTimeout(r, 4000))]).catch(() => {}).then(() => {
     const start = performance.now() - (Number(params.get('t')) || 0) * 1000;
-    renderer.setAnimationLoop(() => { tickFps(); frame((performance.now() - start) / 1000); });
+    pacer = createPacer({
+      renderer,
+      step: (now) => { tickFps(); frame((now - start) / 1000); watchCamera(); },
+      busy: () => nav.intro || !nav.settled || suitcase.flying || suitcase.machine.active || suitcase.over || suitcase.suitcase.lidMoving,
+      // a spinning record on screen wants a smooth turn; otherwise only boiling edges and lanterns move
+      idleFps: () => (player?.playerState === 1 && suitcase.tucked < 0.5 ? 30 : 12),
+    });
+    pacer.start();
   });
 }

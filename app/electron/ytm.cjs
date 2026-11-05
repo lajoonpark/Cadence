@@ -36,7 +36,9 @@ function createYtm({ onState, onSignedIn }) {
     width: 1200,
     height: 800,
     title: 'YouTube Music (Cadence player)',
-    webPreferences: { partition: PARTITION, backgroundThrottling: false, autoplayPolicy: 'no-user-gesture-required' },
+    // Throttled like a background tab: audio plays on, but the hidden page stops painting and
+    // Chromium drops the video track of what plays in it (no unseen video decoding, less heat).
+    webPreferences: { partition: PARTITION, backgroundThrottling: true, autoplayPolicy: 'no-user-gesture-required' },
   });
   win.webContents.setUserAgent(ua);
   win.webContents.setAudioMuted(false);
@@ -145,8 +147,10 @@ function createYtm({ onState, onSignedIn }) {
   }
 
   // On macOS the volume knob is the system volume; the player itself stays at full volume.
+  // It is read (one osascript run) only while a Cadence window is on screen, to catch the volume keys.
   const sysVol = createSystemVolume();
-  if (sysVol) { sysVol.refresh(); setInterval(() => sysVol.refresh(), 2000); }
+  sysVol?.refresh();
+  setInterval(() => { if (active) sysVol?.refresh(); }, 3000);
 
   async function command(name, arg) {
     if (name === 'volume' && sysVol) { sysVol.set(arg); return true; }
@@ -154,9 +158,23 @@ function createYtm({ onState, onSignedIn }) {
     return js(`window.__cadence.command(${JSON.stringify(name)}, ${JSON.stringify(arg ?? null)})`);
   }
 
-  // Poll the page 4x a second and pass state on (position moves smoothly enough for a tonearm).
+  // Poll the page and pass state on: 4x a second while a Cadence window is on screen (smooth enough
+  // for a tonearm), every 3 s while only the menu-bar icon is left (keeps sign-in and volume in step).
+  let active = true;
   let lastSignedIn = null;
-  setInterval(async () => {
+  let pollTimer = null;
+  const POLL_MS = { active: 250, idle: 3000 };
+  const schedule = () => { clearTimeout(pollTimer); pollTimer = setTimeout(poll, active ? POLL_MS.active : POLL_MS.idle); };
+  async function poll() {
+    try { await pollOnce(); } finally { if (!win.isDestroyed()) schedule(); }
+  }
+  function setActive(on) {
+    if (on === active) return;
+    active = on;
+    if (on) { sysVol?.refresh(); poll(); } else schedule();
+  }
+  schedule();
+  async function pollOnce() {
     if (win.isDestroyed()) return;
     const s = await js('window.__cadence?.state()').catch(() => null);
     if (!s) return;
@@ -167,7 +185,7 @@ function createYtm({ onState, onSignedIn }) {
     onState(s);
     if (lastSignedIn === false && s.signedIn) onSignedIn?.();
     lastSignedIn = s.signedIn;
-  }, 250);
+  }
 
   // Google sign-in in a visible window that shares the player's cookies.
   const signInIds = new Set();
@@ -197,7 +215,7 @@ function createYtm({ onState, onSignedIn }) {
 
   // Request handlers main.cjs registers as ipc channels ytm:<name> (renderer: window.cadence.<name>).
   const ipc = { search, playlistArt };
-  return { home, play, command, signIn, ipc, search, playlistArt, window: win };
+  return { home, play, command, signIn, ipc, search, playlistArt, setActive, window: win };
 }
 
 module.exports = { createYtm };

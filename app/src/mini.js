@@ -20,6 +20,7 @@ import { createFlights } from './suitcase/flight.js';
 import { createDiscMachine } from './suitcase/machine.js';
 import { createSearch } from './search.js';
 import { getCover } from './racks/common.js';
+import { maxFps } from './pacer.js';
 
 const params = new URLSearchParams(location.search);
 const shot = params.has('shot');
@@ -144,6 +145,7 @@ function stepFrame(dt) {
 const draw = (t) => (painter ? painter.render(scene, camera, t) : renderer.render(scene, camera));
 let lastT = 0;
 function loop(ms) {
+  if (ms - lastT < 1000 / maxFps() - 2) return;   // Settings > Smoothness, also on a 120 Hz screen
   const dt = Math.min(0.1, (ms - lastT) / 1000);
   lastT = ms;
   stepFrame(dt);

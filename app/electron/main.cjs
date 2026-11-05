@@ -38,11 +38,20 @@ function createWindow() {
   const query = process.env.CADENCE_QUERY || '';
   if (dev) win.loadURL(query ? `${dev}${dev.includes('?') ? '&' : '?'}${query}` : dev);
   else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), query ? { search: query } : {});
+  // The player polls fast only while a window is on screen (see ytm.setActive).
+  for (const ev of ['show', 'hide', 'minimize', 'restore', 'focus']) win.on(ev, updateActive);
   win.on('closed', () => {
     win = null;
+    updateActive();
     // The hidden player keeps the app alive, so quit explicitly where closing the window means quit.
     if (process.platform !== 'darwin') app.quit();
   });
+}
+
+// Is any Cadence window on screen? Then the hidden player is polled 4x a second, else rarely.
+function updateActive() {
+  const shop = !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+  ytm?.setActive(shop || !!mini?.isOpen());
 }
 
 // Show the window, creating it again if it was closed.
@@ -76,7 +85,7 @@ if (!app.requestSingleInstanceLock()) {
     startPlayer();
     createWindow();   // open on start
     createTray();
-    mini = createMini();
+    mini = createMini({ onVisible: updateActive });
     mini.register();
     setTimeout(() => mini.prewarm(), 4000);
     if (process.env.CADENCE_TEST) global.__cadenceMini = mini;   // lets scripts/e2e drive it without pressing keys

@@ -82,10 +82,20 @@
     },
   };
 
+  // Nobody sees this page's video, so ask for the smallest stream once per song (less decoding;
+  // the audio quality does not depend on it).
+  let lowFor = null;
+  function lowVideo(p, id) {
+    if (!id || id === lowFor) return;
+    lowFor = id;
+    try { p.setPlaybackQualityRange?.('tiny', 'tiny'); p.setPlaybackQuality?.('tiny'); } catch { /* player API changed: harmless */ }
+  }
+
   function state() {
     const p = player();
     const meta = navigator.mediaSession?.metadata;
     const data = p?.getVideoData?.() ?? {};
+    if (p) lowVideo(p, data.video_id);
     // During an ad, media session metadata describes the ad, so leave the song fields empty.
     const ad = !!document.querySelector('#movie_player.ad-showing, .ytp-ad-player-overlay');
     const song = ad ? null : meta;

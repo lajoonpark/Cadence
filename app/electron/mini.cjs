@@ -8,7 +8,7 @@ const path = require('node:path');
 const SHORTCUT = 'Control+Alt+Space';
 const SIZE = { width: 540, height: 620 };    // matches W x H in src/mini.js
 
-function createMini() {
+function createMini({ onVisible } = {}) {
   let win = null;
   let state = 'hidden';                       // hidden | open | closing
   let shownAt = 0;
@@ -50,7 +50,7 @@ function createMini() {
     else win.loadFile(path.join(__dirname, '..', 'dist', 'mini.html'));
     // clicking outside: the window loses focus, so shut the lid (not in the first moments, while focus is settling)
     win.on('blur', () => { if (state === 'open' && Date.now() - shownAt > 400) close(); });
-    win.on('closed', () => { win = null; state = 'hidden'; });
+    win.on('closed', () => { win = null; state = 'hidden'; onVisible?.(); });
   }
 
   function send(channel, ...args) {
@@ -74,6 +74,7 @@ function createMini() {
       win.show();                              // the page is still invisible: it fades in as the lid is released
     }
     state = 'open';
+    onVisible?.();
     if (win.webContents.isLoading()) win.webContents.once('did-finish-load', () => send('mini:open'));
     else send('mini:open');
   }
@@ -101,6 +102,7 @@ function createMini() {
     if (state === 'closing' || state === 'open') {
       state = 'hidden';
       win.hide();
+      onVisible?.();
     }
   });
 
@@ -116,6 +118,7 @@ function createMini() {
       if (registered) globalShortcut.unregister(SHORTCUT);
       registered = false;
     },
+    isOpen: () => state !== 'hidden',
     prewarm() { if (!win) create(); },         // load the page ahead of the first summon, so the lid does not stutter
     send,
     toggle, open, close,

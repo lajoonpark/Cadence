@@ -73,6 +73,13 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
   *Painting* sets the watercolour strength: Faint / Light / Medium / Heavy (default Heavy). Faint is the
   old single pass; the others flatten shading into washes and let colour bleed (`LEVELS` in
   `src/watercolour.js`). `?wc=0..3` (or `CADENCE_QUERY="wc=2" npm run dev`) pins a level for screenshots.
+  *Smoothness* caps the frame rate at 60 or 30 fps.
+- **Heat / battery**: the shop is drawn at that cap only while something moves (camera, input, flights,
+  lid); once still it drops to 12 fps (30 while a record spins on screen), and stops while the window is
+  hidden, minimised or covered (`src/pacer.js`; `node scripts/idle-check.mjs [rack]` checks it). The
+  hidden YouTube Music window is throttled like a background tab (no painting, no video decoding, smallest
+  video stream) and is polled 4x a second only while a Cadence window is on screen, every 3 s otherwise;
+  the macOS volume is read only while a window is on screen.
 - **Covers**: playlist and mix covers are found in any of YouTube's thumbnail shapes; one that is
   missing or fails to load is painted as a collage of the playlist's first songs (`src/cover.js`).
   `CADENCE_DUMP=1` saves the raw API responses to the app's userData (`dumps/`) and logs any item

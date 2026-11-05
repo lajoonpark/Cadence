@@ -14,6 +14,7 @@ export const DEFAULTS = {
   paint: 3, // watercolour strength, 0..3 (see LEVELS in watercolour.js)
   covers: 3, // how strongly album covers are painted, 0..3 (COVER_LEVELS in coverpaint.js)
   playOnArm: true, // the song starts when the tonearm lands and the record spins up (false: at once)
+  maxFps: 60, // frame-rate cap, 60 or 30 (pacer.js); 30 runs cooler on a laptop
   fps: false, // frame-rate readout in the corner (for perf reports)
 };
 

@@ -6,13 +6,14 @@
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, addBox, paint, WOOD, SLEEVE, smooth } from './common.js';
-import { popNear, viewForward } from './pop.js';
+import { popNear, viewForward, stagePath } from './pop.js';
 
 const HALF = 0.33;                    // half width of a tower side
 const TIERS = [0.30, 0.86, 1.42];     // pocket floors
 const LEAN = 0.2;
 const OUT = 0.405;                    // where a cover's bottom edge stands (from the tower axis)
 const TOP = 1.88;
+const PULL = 0.36;                    // a hovered cover first comes this far straight out of its pocket
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(1, 1, 1), _p = new THREE.Vector3();
 
@@ -22,7 +23,7 @@ export function createSpinnerRack({ onPick }) {
   const rest = new THREE.Matrix4();
   let vel = 0;
   let ptr = null;
-  const cam = new THREE.Vector3(), rp = new THREE.Vector3(), pp = new THREE.Vector3(), fw = new THREE.Vector3();
+  const cam = new THREE.Vector3(), rp = new THREE.Vector3(), pp = new THREE.Vector3(), fw = new THREE.Vector3(), xp = new THREE.Vector3();
 
   return core.contract({
     setup(c) {
@@ -130,15 +131,20 @@ export function createSpinnerRack({ onPick }) {
         const L = s.lift, e = L * L * (3 - 2 * L);
         const out = 0.03 * s.peek + 0.03 * Math.sin(s.bump * Math.PI);
         rp.set(s.base.x + s.d.x * out, s.yc + 0.06 * s.peek, s.base.z + s.d.z * out);
-        popNear(pp, rp, cam, fw, 0.88);
-        rp.lerp(pp, e);
+        // straight out of its pocket first (radially, still leaning: clear of the pocket lip and the tier
+        // above, so its vinyl has room to slide out), then toward you and turning
+        xp.copy(rp).addScaledVector(s.d, PULL);
+        popNear(pp, xp, cam, fw, 0.88);
+        const T = stagePath(_p, L, rp, xp, pp);
+        rp.copy(_p);
+        const e2 = T;
         rp.y += s.drop * 0.7;
         const dx = cam.x - rp.x, dz = cam.z - rp.z;
         const tyaw = s.a + wrap(Math.atan2(dx, dz) - s.a);
         const tpitch = -Math.atan2(cam.y - rp.y, Math.hypot(dx, dz));
         s.mesh.position.copy(rp);
-        s.mesh.scale.setScalar(1 + 0.06 * e);
-        s.mesh.rotation.set(-LEAN + (tpitch + LEAN) * e, s.a + (tyaw - s.a) * e, s.roll * (1 - e));
+        s.mesh.scale.setScalar(1 + 0.06 * e2);
+        s.mesh.rotation.set(-LEAN + (tpitch + LEAN) * e2, s.a + (tyaw - s.a) * e2, s.roll * (1 - e2));
       });
     },
   });

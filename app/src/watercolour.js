@@ -400,9 +400,14 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
 uniform sampler2D tA;
 uniform sampler2D tB;
 uniform float k;
+uniform vec4 hi;      // a box (uv: x0, y0, x1, y1) where tA stays full strength: the suitcase while the camera travels
+uniform vec2 feather; // its soft edge, uv
 varying vec2 vUv;
-void main() { gl_FragColor = mix(texture2D(tA, vUv), texture2D(tB, vUv), k); }
-`, {}, { tA: { value: null }, tB: { value: null }, k: { value: 0 } });
+void main() {
+  vec2 a = smoothstep(vec2(0.0), feather, vUv - hi.xy) * smoothstep(vec2(0.0), feather, hi.zw - vUv);
+  gl_FragColor = mix(texture2D(tA, vUv), texture2D(tB, vUv), k * (1.0 - a.x * a.y));
+}
+`, {}, { tA: { value: null }, tB: { value: null }, k: { value: 0 }, hi: { value: new THREE.Vector4(2, 2, 2, 2) }, feather: { value: new THREE.Vector2(0.01, 0.01) } });
   { const prev = renderer.getRenderTarget(); renderer.initRenderTarget(mixT); renderer.setRenderTarget(mixT); renderer.compile(mixP.sc, postCam); renderer.setRenderTarget(prev); } // first used as the intro ends: compile it now
   let lite = null;
   let motion = false, motionK = 0, lastT = null, sawFrame = false;
@@ -423,7 +428,34 @@ void main() { gl_FragColor = mix(texture2D(tA, vUv), texture2D(tB, vUv), k); }
     renderer.initRenderTarget(mixT); // allocated now, not in the frame the intro ends
     material.uniforms.tWash.value = wash.texture;
   }
-  function renderWash(t, sync) {
+  // While the camera travels the world is washed at half size, but the suitcase (an overlay that does
+  // not move with the camera) keeps the full wash: the full pipeline runs only inside its box (scissored,
+  // each step a little wider than the next so the Kuwahara and bleed taps read valid pixels), and the
+  // mix pass keeps full strength inside the box with a soft edge. hiRect: CSS px { left, right, top, bottom }.
+  const FEATHER = 28; // CSS px
+  function scissorFull(r) {
+    const css = renderer.domElement.clientWidth || innerWidth, cssH = renderer.domElement.clientHeight || innerHeight;
+    const ws = washSize(renderer.getDrawingBufferSize(new THREE.Vector2()), wash.scale);
+    const f = ws.x / css, fy = ws.y / cssH;
+    const bleedPx = Math.ceil(L.bleed * wash.scale) + 4, radPx = Math.ceil(L.radius * wash.scale) + 4;
+    const grow = [bleedPx + radPx + 4, bleedPx + 2, 0]; // prep, wash, bleed
+    wash.steps.forEach(([rt], i) => {
+      const g = grow[i];
+      const x0 = Math.max(0, Math.floor(r.left * f) - g), x1 = Math.min(ws.x, Math.ceil(r.right * f) + g);
+      const y0 = Math.max(0, Math.floor((cssH - r.bottom) * fy) - g), y1 = Math.min(ws.y, Math.ceil((cssH - r.top) * fy) + g);
+      rt.scissor.set(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+      rt.scissorTest = true;
+    });
+    const mu = mixP.m.uniforms;
+    // a box that reaches near the screen edge runs off it, so no soft edge shows there
+    const near = 2 * FEATHER;
+    const u0 = r.left < near ? -1 : r.left / css, u1 = r.right > css - near ? 2 : r.right / css;
+    const v0 = r.bottom > cssH - near ? -1 : (cssH - r.bottom) / cssH, v1 = r.top < near ? 2 : (cssH - r.top) / cssH;
+    mu.hi.value.set(u0, v0, u1, v1);
+    mu.feather.value.set(FEATHER / css, FEATHER / cssH);
+  }
+  function unscissor() { for (const [rt] of wash.steps) rt.scissorTest = false; mixP.m.uniforms.hi.value.set(2, 2, 2, 2); }
+  function renderWash(t, sync, hiRect) {
     if (!wash) return;
     const dt = lastT === null ? 0 : Math.min(0.25, Math.max(0, t - lastT));
     lastT = t;
@@ -432,8 +464,11 @@ void main() { gl_FragColor = mix(texture2D(tA, vUv), texture2D(tB, vUv), k); }
     sawFrame = true;
     const u = material.uniforms;
     if (motionK <= 0) { wash.render(sync); u.tWash.value = wash.texture; return; }
-    if (motionK >= 1) { lite.render(sync); u.tWash.value = lite.texture; return; }
+    const keep = motionK >= 1 && hiRect && hiRect.right > hiRect.left;
+    if (motionK >= 1 && !keep) { lite.render(sync); u.tWash.value = lite.texture; return; }
+    if (keep) scissorFull(hiRect);
     wash.render(sync); lite.render(sync);
+    if (keep) unscissor(); else mixP.m.uniforms.hi.value.set(2, 2, 2, 2);
     const mu = mixP.m.uniforms;
     mu.tA.value = wash.texture; mu.tB.value = lite.texture;
     mu.k.value = motionK * motionK * (3 - 2 * motionK);
@@ -476,7 +511,7 @@ void main() { gl_FragColor = mix(texture2D(tA, vUv), texture2D(tB, vUv), k); }
       renderer.render(scene, camera);
       renderOverlay(renderer, overlay);
       sync?.('scene');
-      renderWash(t, sync);
+      renderWash(t, sync, overlay?.hiRect?.());
       renderer.setRenderTarget(null);
       renderer.render(post, postCam);
       sync?.('final');

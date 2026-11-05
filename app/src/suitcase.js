@@ -18,6 +18,7 @@
 // Controls: previous, playPause, next, like (buttons), knob, record (drag to seek).
 import * as THREE from 'three';
 import { paintCover, coverSeed } from './coverpaint.js';
+import { settings } from './settings.js';
 import { LAYOUT as L, COMMANDS, isButton, armAngleForProgress, parkedArmAngle } from './tonearm.js';
 import { LidHinge, DEFAULT_STOP } from './lid.js';
 import { VolumeKnob } from './knob.js';
@@ -32,8 +33,17 @@ const easeOut = (t) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
 const SPIN = 3.49;          // 33 1/3 rpm in radians per second
 const MAX_PITCH = 0.12, MAX_ROLL = 0.1;
 
+// A picked song with a record on its way to the platter. Settings > Start of a song: "when the arm lands"
+// (default) stops what plays now and starts the song once the needle is down (sc.cue); "at once" plays now.
+export function startSong(music, sc, item) {
+  if (settings.get('playOnArm') === false) return music.play(item);
+  music.command('pause');
+  sc.cue(() => music.play(item));
+}
+
 // Square cover from a URL, centre-cropped onto a 512 px canvas; shows paper until it arrives.
 const covers = new Map();
+settings.on('covers', () => { for (const t of covers.values()) t.userData.repaint?.(); });
 export function coverFromUrl(url) {
   if (!url) return null;
   let t = covers.get(url);
@@ -50,10 +60,13 @@ export function coverFromUrl(url) {
   img.crossOrigin = 'anonymous';
   t.userData.loaded = new Promise((res) => {
     img.onload = () => {
-      const s = Math.min(img.width, img.height);
-      g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 512, 512);
-      paintCover(g, 512, coverSeed(url));
-      t.needsUpdate = true;
+      // drawn again when Settings > Cover art changes
+      (t.userData.repaint = () => {
+        const s = Math.min(img.width, img.height);
+        g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 512, 512);
+        paintCover(g, 512, coverSeed(url));
+        t.needsUpdate = true;
+      })();
       res(true);
     };
     img.onerror = () => res(false);
@@ -99,7 +112,13 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
   let enabled = true;
 
   // ---- record on the platter ----
-  let seatHas = false, held = false, dropT = 1, dropH = 1.1;   // dropH: how high a placed or swapped record starts above the platter
+  let seatHas = false, held = false, dropT = 1, dropH = 1.1;
+  // A cued song (Settings > Start of a song, "when the arm lands"): it starts only once the record that
+  // is on its way has landed, the arm has swung onto the lead-in groove and dropped onto the vinyl.
+  // cue = { start: fn, at: s } until then; afterwards startHold keeps the arm at the lead-in until the new
+  // track reports in (its state still says the old one for a moment).
+  let cue = null, startHold = 0, startFrom = null;
+  const CUE_GIVE_UP = 7;                      // s: start anyway if the arm never gets there (hidden window, ...)   // dropH: how high a placed or swapped record starts above the platter
   let songProgress = 0;                       // progress of the song itself: an ad must not move the tonearm
   let labelTex = null;
   const labels = createLabelPolicy();         // which cover the label shows (suitcase/label.js)
@@ -190,6 +209,7 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
     showLabel(cover ?? null);
     dropT = animate ? 0 : 1;
     dropH = 1.1;
+    if (claimFor && cue) cue.landed = true;  // the cued song's record (not the one already on the platter)
     if (claimFor) {
       labels.land(cover, claimFor.baseVideoId);
       syncLabel();                             // the new track may already be playing: then this cover belongs to it
@@ -254,13 +274,23 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
     }
 
     // tonearm: creeps inward through the song, parks clear of the record when idle, lifts while it travels
-    const onRecord = hasTrack && seatHas && !held;
-    const armTarget = onRecord ? armAngleForProgress(progressNow()) : parkedArmAngle();
+    const cueing = !!cue?.landed && seatHas && !held && dropT >= 1;
+    const leadIn = cueing || (startHold > now() && videoId === startFrom);
+    const onRecord = (hasTrack || leadIn) && seatHas && !held;
+    const armTarget = onRecord ? armAngleForProgress(leadIn ? 0 : progressNow()) : parkedArmAngle();
     armAngle += (armTarget - armAngle) * smooth(6, dt);
     armPivot.rotation.y = armAngle;
     const travelling = Math.abs(armTarget - armAngle) > 0.04;
     armLiftAmt += ((!onRecord || travelling ? 1 : 0) - armLiftAmt) * smooth(8, dt);
     armLift.rotation.z = -0.1 * armLiftAmt;
+    // the needle is down on the lead-in: the record spins up and the song starts
+    if (cue && ((cueing && !travelling && armLiftAmt < 0.12) || now() - cue.at > CUE_GIVE_UP)) {
+      const start = cue.start;
+      cue = null;
+      startHold = now() + 4; startFrom = videoId;
+      playing = true; playingHold = now() + 4;  // spins from now, before the player says so
+      start();
+    }
 
     // knob and hover feedback
     knobNode.rotation.y = -knob.angle;
@@ -448,6 +478,8 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
     root, parts, recordKit, hinge,
     setState, update, open, close, hover, pointerDown, pointerDrag, pointerUp, wheel, nudgeVolume, lean, cursor,
     placeRecord, liftRecord, fitPoints,
+    // start(): begin the song once the next record has landed and the arm is down on it (see cue above)
+    cue(start) { cue = { start, at: now() }; playing = false; playingHold = now() + 1.5; },
     // is the pointer on the case itself, where it is right now (no hover feedback)
     touches(ndc, camera) { return !!ndc && pick(ndc, camera).over; },
     set enabled(v) { enabled = v; if (!v) { cancelDrag(); setHover(null); } },

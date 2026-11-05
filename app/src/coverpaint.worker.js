@@ -1,10 +1,10 @@
 // Paints covers off the main thread: the blur filters in paintCover cost several ms per cover, and a
 // shelf's worth arrives at once, usually just as the intro starts pushing in.
-//   in:  { id, url, size }
+//   in:  { id, url, size, level }
 //   out: { id, bitmap, color: [r, g, b] | null } (bitmap transferred), or { id, error }
 import { paintCover, coverSeed } from './coverpaint.js';
 
-self.onmessage = async ({ data: { id, url, size } }) => {
+self.onmessage = async ({ data: { id, url, size, level } }) => {
   try {
     const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -24,7 +24,7 @@ self.onmessage = async ({ data: { id, url, size } }) => {
       color = [Math.round(R / n), Math.round(G / n), Math.round(B / n)];
     }
     img.close();
-    paintCover(g, size, coverSeed(url));
+    paintCover(g, size, coverSeed(url), level);
     const bitmap = c.transferToImageBitmap();
     self.postMessage({ id, bitmap, color }, [bitmap]);
   } catch (e) {

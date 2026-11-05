@@ -12,7 +12,7 @@ import '@fontsource/caveat-brush';
 import { WATERCOLOUR } from './style.js';
 import { createWatercolour } from './watercolour.js';
 import { createMusic } from './music.js';
-import { createSuitcase } from './suitcase.js';
+import { createSuitcase, startSong } from './suitcase.js';
 import { createCaption } from './controls.js';
 import { fitCamera } from './suitcase/fit.js';
 import { washBackdrop } from './suitcase/paint.js';
@@ -64,11 +64,23 @@ const hud = new THREE.Group();
 camera.add(hud);
 const flights = createFlights({ scene: hud, suitcase, camera, view: camera, worldCase: true });
 const machine = createDiscMachine({ parent: hud, camera, view: camera, kit: suitcase.recordKit, onDisc: (d) => flights.receive(d) });
+let listenAgain = null;
 const search = createSearch({
   music,
   onPlay: (item) => {
-    music.play(item);
+    startSong(music, suitcase, item);
     machine.run(getCover(item.art, 512).tex, { x: 0.58, y: 0.08, h: 0.22 });   // stands to the right of the case, clear of the card's edge
+  },
+  // the empty box shows the Listen again shelf (only here, not in the shop: Lajoon); fetched at most every 5 min
+  suggest: async () => {
+    if (!listenAgain || performance.now() - listenAgain.at > 300000) {
+      listenAgain = { at: performance.now(), got: music.shelves().then(({ shelves }) => {
+        const sh = shelves.find((x) => /listen again/i.test(x.title)) ?? shelves[0];
+        return sh ? { title: sh.title, items: sh.items } : null;
+      }) };
+      listenAgain.got.catch(() => { listenAgain = null; });
+    }
+    return listenAgain.got;
   },
 });
 caption.show(true, true);
@@ -163,7 +175,10 @@ addEventListener('pointerdown', (e) => {
 });
 addEventListener('pointerup', () => { suitcase.pointerUp(); renderer.domElement.style.cursor = suitcase.cursor(); });
 addEventListener('blur', () => suitcase.pointerUp());
-addEventListener('wheel', (e) => { e.preventDefault(); suitcase.wheel(e.deltaY, e.deltaMode); }, { passive: false });
+addEventListener('wheel', (e) => {
+  if (search.isOpen()) return;   // the wheel scrolls the search slips, never the volume
+  e.preventDefault(); suitcase.wheel(e.deltaY, e.deltaMode);
+}, { passive: false });
 
 // ---- keys: Esc shuts it; Space, arrows, L as in the shop ----
 addEventListener('keydown', (e) => {

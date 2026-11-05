@@ -2,7 +2,8 @@
 // wooden crates of records on it, covers toward you. Point at a crate and all its records pop out
 // and float in the air in front of you, spread out in a row or two so every cover shows; the one
 // under the cursor grows, comes forward and shows its name tag. Move off the crate and the floating
-// records and they drop back in. One crate for a few records, up to four for 24.
+// records and they drop back in. Always a single crate: it gets deeper (and the records stand closer)
+// the more records there are.
 // Lemon crates, a striped cloth and a painted title board dress the stall.
 import * as THREE from 'three';
 import { rng } from '../rand.js';
@@ -10,7 +11,8 @@ import { createRackCore, addBox, paint, WOOD, SLEEVE } from './common.js';
 
 const TABLE = 0.72;                 // table top height
 const CW = 0.4;                     // crate outer width
-const SP = 0.05;                    // record to record
+const SP = 0.05;                    // record to record (closer when the crate is full)
+const DMAX = 0.9;                   // deepest crate the table takes
 const FLOOR = 0.06, LIP = 0.15;     // crate floor top and the low front
 const LEAN = 0.2;
 const WOODS = ['#c9a06a', '#b88a58', '#d0aa74', '#a87a4a'];
@@ -37,7 +39,8 @@ function hitBox(ray, m, half) {
   return _ray.intersectBox(_bx, _hit) ? _hit.distanceTo(_ray.origin) : Infinity;
 }
 
-const crateDepth = (per) => Math.min(0.62, Math.max(0.32, per * SP + 0.16));
+const crateDepth = (per) => Math.min(DMAX, Math.max(0.32, per * SP + 0.16));
+const spacing = (per) => Math.min(SP, (DMAX - 0.16) / Math.max(1, per));
 
 // slatted crate (open top, low front) with the given wood; `closed` = a solid empty box to stand on
 function buildCrate(parent, Dc, mat, { closed = false, height = LIP + 0.09 } = {}) {
@@ -98,14 +101,12 @@ export function createCratesRack({ onPick }) {
     items(c, items) {
       const n = items.length, r = rng(n * 23 + 11);
       while (stall.children.length > stall.userData.fixed) stall.remove(stall.children[stall.children.length - 1]);
-      const nc = n <= 6 ? 1 : n <= 12 ? 2 : n <= 18 ? 3 : 4;
-      const per = Math.ceil(n / nc);
-      // crate slots: [x, z]
-      const slots = [[[0, 0.15]], [[-0.3, 0.15], [0.3, 0.15]],
-        [[-0.3, 0.27], [0.3, 0.27], [0, -0.28]], [[-0.3, 0.27], [0.3, 0.27], [-0.3, -0.28], [0.3, -0.28]]][nc - 1];
+      // one crate, always (Lajoon): deeper for more records
+      const nc = 1, per = Math.max(1, n);
+      const slots = [[0, Math.min(0.15, 0.6 - crateDepth(per) / 2)]];
       crates = slots.map(([x, z], k) => ({
         x: x + (r() - 0.5) * 0.03, z: z + (r() - 0.5) * 0.04, up: TABLE, yaw: (r() - 0.5) * 0.08,
-        Dc: crateDepth(per), start: k * per, count: Math.max(0, Math.min(per, n - k * per)),
+        Dc: crateDepth(per), sp: spacing(per), start: k * per, count: Math.max(0, Math.min(per, n - k * per)),
       }));
       fan.cr = null;
       crates.forEach((cr, k) => {
@@ -123,7 +124,7 @@ export function createCratesRack({ onPick }) {
         s.k = i - cr.start;                       // 0 = front-most
         s.lx = (r() - 0.5) * 0.015;
         s.lean = LEAN + (r() - 0.5) * 0.08;
-        const zb = cr.Dc / 2 - 0.075 - s.k * SP;  // bottom edge
+        const zb = cr.Dc / 2 - 0.075 - s.k * cr.sp; // bottom edge
         s.lz = zb - (SLEEVE / 2) * Math.sin(s.lean);
         s.ly = cr.up + FLOOR + (SLEEVE / 2) * Math.cos(s.lean);
         s.roll = (r() - 0.5) * 0.03;
@@ -202,7 +203,7 @@ export function createCratesRack({ onPick }) {
       let cols = 1, rows = 1, fs = 1, cellW = SLEEVE + GAP, cellH = SLEEVE + GAP + 0.06;
       if (cr) {
         const m = cr.count;
-        cols = m <= 4 ? m : Math.ceil(m / 2);
+        cols = m <= 4 ? m : m <= 12 ? Math.ceil(m / 2) : Math.ceil(m / 3);
         rows = Math.ceil(m / cols);
         const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2), tanH = tanV * camera.aspect;
         const D = DIST;
@@ -250,10 +251,7 @@ export function createCratesRack({ onPick }) {
           // faces you, each with its own small tilt
           _q.setFromEuler(_e.set(0.03 * Math.sin(i * 2.3), 0.05 * Math.sin(i * 3.1), (0.045 * Math.sin(i * 5.7)) * (1 - e)));
           _q.premultiply(_fq);
-          if (f > 0) {
-            rp.lerp(fp, f).addScaledVector(_ay, 0.18 * Math.sin(Math.PI * f)); // arcs up out of the crate
-            _rq.slerp(_q, f);
-          }
+          if (f > 0) outThenFloat(rp, _rq, fp, _q, s.fl);
           s.mesh.scale.setScalar(1 + (fan.fs * (1 + GROW * e) - 1) * f);
           s.floatScale = fan.fs;
         } else {
@@ -261,8 +259,7 @@ export function createCratesRack({ onPick }) {
             // on its way home: same path, back
             fp.copy(s.lastFloat ?? rp);
             _q.copy(s.lastFloatQ ?? _rq);
-            rp.lerp(fp, f).addScaledVector(_ay, 0.18 * Math.sin(Math.PI * f));
-            _rq.slerp(_q, f);
+            outThenFloat(rp, _rq, fp, _q, s.fl);
           }
           s.mesh.scale.setScalar(1 + ((s.floatScale ?? 1) - 1) * f);
         }
@@ -276,6 +273,24 @@ export function createCratesRack({ onPick }) {
     },
   });
 }
+
+// Straight up out of the crate first (still leaning in its slot, so it slides past the records either
+// side and over the crate's front), then it flies to its spot in the fan and turns to face you.
+// rp/rq: the pose in the crate (changed in place), fp/fq: the floating pose, fl: 0..1 along the way.
+const _up = new THREE.Vector3(), _d = new THREE.Vector3();
+function outThenFloat(rp, rq, fp, fq, fl) {
+  const up = ss(fl / 0.4), go = ss((fl - 0.3) / 0.7);
+  _up.copy(rp);
+  _up.y += (SLEEVE + 0.08) * up;
+  // across first, toward you last: the records rise one behind the other, so they part sideways before
+  // they line up at the same depth (_az: toward the viewer, set in layout)
+  _d.copy(fp).sub(_up);
+  const dz = _d.dot(_az);
+  _d.addScaledVector(_az, -dz);
+  rp.copy(_up).addScaledVector(_d, go).addScaledVector(_az, dz * ss((fl - 0.5) / 0.5)).addScaledVector(_yUp, 0.06 * Math.sin(Math.PI * go));
+  rq.slerp(fq, ss((fl - 0.7) / 0.3)); // turns once it is well away from the others
+}
+const _yUp = new THREE.Vector3(0, 1, 0);
 
 // crate-space point -> rack space
 const _out = new THREE.Vector3();

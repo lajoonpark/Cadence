@@ -13,6 +13,8 @@ const BASE = TABLE_H + 0.03;   // sleeves stand on the trough floor
 const REST_YAW = 1.3;          // mostly edge-on, a sliver of cover showing
 const LIFT = 0.3, FORWARD = 0.22, TILT_BACK = -0.26;
 const FAN = 3, FAN_GAP = 0.27; // records up at once, and how far apart they stand
+const RISE = SLEEVE + 0.05;    // straight up this far first, clear of the row, before it turns and fans out
+const ss = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
 function buildTable(g) {
   const { dark: wood, top, light: trough } = WOOD;
@@ -86,18 +88,23 @@ export function createTroughRack({ onPick }) {
         const k = inFan ? i - centre : 0;
         if (inFan) s.slot = k;
         const slot = s.slot ?? 0;
-        // the rest of the row leans away from the fan to make room, fading out over a few slots
-        const d = centre < 0 || inFan ? 0 : i - centre;
-        const push = d === 0 ? 0 : Math.sign(d) * 0.085 * Math.max(0, 1 - (Math.abs(d) - 2) / 4);
-        s.pushed = (s.pushed ?? 0) + (push - (s.pushed ?? 0)) * kPush;
+        // the rest of the row stays put: the fan rises straight up out of it, so nothing needs to make
+        // room (rows leaning away by different amounts ran into each other)
+        s.pushed = 0;
         const F = s.fanA, L = s.lift, m = s.mesh;
         const fx = fanX + slot * FAN_GAP;                 // where it stands in the fan
+        // pulled straight up out of the row first (still edge-on, so it slides past its neighbours),
+        // then it turns, steps forward and settles into the fan; down the same way
+        // (the three spread apart and step forward before they turn and settle, so they never turn into each
+        // other or come down onto the row)
+        const up = ss(F / 0.4), spread = ss((F - 0.3) / 0.35), T = ss((F - 0.45) / 0.55);
+        const fanY = LIFT * (1 - 0.12 * Math.abs(slot));
         m.position.set(
-          (s.x + s.pushed) * (1 - F) + fx * F,
-          BASE + SLEEVE / 2 + LIFT * F * (1 - 0.12 * Math.abs(slot)) + 0.04 * L + 0.045 * s.peek + 0.06 * Math.sin(s.bump * Math.PI) + s.drop * 0.7,
-          -0.02 + FORWARD * F + 0.05 * L - 0.03 * Math.abs(slot) * F,
+          (s.x + s.pushed) * (1 - spread) + fx * spread,
+          BASE + SLEEVE / 2 + RISE * up + (fanY - RISE) * T + 0.04 * L + 0.045 * s.peek + 0.06 * Math.sin(s.bump * Math.PI) + s.drop * 0.7,
+          -0.02 + (FORWARD + 0.05 * L - 0.03 * Math.abs(slot)) * spread, // in front of the row before it comes down
         );
-        m.rotation.set(TILT_BACK * F, s.yaw * (1 - F) - slot * 0.12 * F, s.roll * (1 - F) - s.pushed * 1.6 - slot * 0.09 * F);
+        m.rotation.set(TILT_BACK * T, s.yaw * (1 - T) - slot * 0.12 * T, s.roll * (1 - T) - s.pushed * 1.6 * (1 - up) - slot * 0.09 * T);
       });
     },
   });

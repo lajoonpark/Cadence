@@ -16,6 +16,7 @@ import { createSettingsPanel } from './settings-panel.js';
 import { settings } from './settings.js';
 import { createMusic } from './music.js';
 import { createPlayer } from './suitcase/player.js';
+import { startSong } from './suitcase.js';
 import '@fontsource/caveat-brush';
 
 const params = new URLSearchParams(location.search);
@@ -103,7 +104,7 @@ const placed = new Map();               // station index -> { key, title }: what
 let hoverArg = params.has('hover') ? Number(params.get('hover')) : null;
 
 function pick(item, index, disc) {
-  music.play(item);
+  if (disc) startSong(music, suitcase.suitcase, item); else music.play(item);
   // the vinyl flies from the sleeve to the suitcase's platter: disc = { matrixWorld, cover }
   void index;
   if (disc) suitcase.receive(disc);
@@ -137,7 +138,7 @@ nav.onChange(() => { menu.setCurrent(nav.at); warm(); });
 menu.setCurrent(nav.at);
 // the search bar (Option+Cmd+S / Ctrl+Alt+S) must exist before the key handlers below are registered
 // a search pick has no sleeve: the disc machine pops up by the suitcase and spits the record out
-const search = createSearch({ music, onPlay: (item) => { music.play(item); suitcase.dispense(getCover(item.art, 512).tex); } });
+const search = createSearch({ music, onPlay: (item) => { startSong(music, suitcase.suitcase, item); suitcase.dispense(getCover(item.art, 512).tex); } });
 // Settings (Cmd+, or the SETTINGS word): swallows keys itself while open
 const settingsPanel = createSettingsPanel();
 // covers that were repaired in the background: let the racks reload them
@@ -514,7 +515,7 @@ addEventListener('keydown', (e) => {
 // Scrolling down turns it down (Lajoon's ask; with macOS natural scrolling that is the finger moving down).
 let wheelVol = null, wheelIdle = 0;
 addEventListener('wheel', (e) => {
-  if (settingsPanel.isOpen()) return;
+  if (settingsPanel.isOpen() || search.isOpen()) return; // the wheel scrolls the search slips then, never the volume
   wheelVol = Math.min(100, Math.max(0, (wheelVol ?? player.volume ?? 70) + e.deltaY * 0.05));
   music.command('volume', wheelVol);
   clearTimeout(wheelIdle);

@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, addBox, paint, WOOD, SLEEVE } from './common.js';
-import { popNear, viewForward } from './pop.js';
+import { popNear, viewForward, stagePath } from './pop.js';
 
 const WALL_Z = -0.08;       // the plaster is here (rack origin is 0.08 in front of it)
 const LEAN = 0.1;           // covers lean back against the wall
@@ -13,11 +13,11 @@ const ROWS_Y = { 1: [1.35], 2: [1.85, 1.2], 3: [2.1, 1.5, 0.9] }; // top row fir
 // few records get big covers, so a single ledge doesn't leave a bare wall
 const sizeFor = (n) => (n <= 3 ? 0.62 : n <= 5 ? 0.46 : SLEEVE);
 const rowsFor = (n) => (n <= 5 ? 1 : n <= 12 ? 2 : 3);
-const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(1, 1, 1);
+const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new THREE.Vector3(1, 1, 1), _p = new THREE.Vector3();
 
 export function createWallRack({ onPick }) {
   const core = createRackCore({ onPick, sign: { w: 1.2, h: 0.15 }, tag: { w: 0.46, h: 0.135 }, sleeve: (n) => ({ size: sizeFor(n) }) });
-  const rp = new THREE.Vector3(), pp = new THREE.Vector3(), fw = new THREE.Vector3();
+  const rp = new THREE.Vector3(), pp = new THREE.Vector3(), fw = new THREE.Vector3(), xp = new THREE.Vector3();
   const ledges = new THREE.Group();
   const rest = new THREE.Matrix4();
   const potGeo = new THREE.CylinderGeometry(0.035, 0.028, 0.06, 10);
@@ -87,15 +87,19 @@ export function createWallRack({ onPick }) {
         s.push += (want - s.push) * k;
         const L = s.lift, e = L * L * (3 - 2 * L);
         rp.set(s.x + s.push, s.yc + 0.05 * s.peek + 0.03 * Math.sin(s.bump * Math.PI), REST_Z + 0.03 * s.peek);
-        popNear(pp, rp, cam, fw);
-        rp.lerp(pp, e);
+        // off the wall first (straight out, still flat), then toward you and turning
+        xp.copy(rp); xp.z += 0.07;
+        popNear(pp, xp, cam, fw);
+        const T = stagePath(_p, L, rp, xp, pp, { split: 0.35 });
+        rp.copy(_p);
+        const e2 = T;
         rp.y += s.drop * 0.7;
         const dx = cam.x - rp.x, dz = cam.z - rp.z;
         const tyaw = Math.atan2(dx, dz);
         const tpitch = -Math.atan2(cam.y - rp.y, Math.hypot(dx, dz));
         s.mesh.position.copy(rp);
-        s.mesh.scale.setScalar(1 + 0.06 * e);
-        s.mesh.rotation.set(s.tilt + (tpitch - s.tilt) * e, s.yaw + (tyaw - s.yaw) * e, s.roll * (1 - e));
+        s.mesh.scale.setScalar(1 + 0.06 * e2);
+        s.mesh.rotation.set(s.tilt + (tpitch - s.tilt) * e2, s.yaw + (tyaw - s.yaw) * e2, s.roll * (1 - e2));
       });
     },
   });

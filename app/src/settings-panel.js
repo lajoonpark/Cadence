@@ -32,13 +32,13 @@ const CSS = `
 .st-veil { position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center;
   background: rgba(60,45,35,.18); opacity: 0; visibility: hidden; transition: opacity .3s ease, visibility 0s .3s; }
 .st-veil.show { opacity: 1; visibility: visible; transition: opacity .3s ease; }
-.st-card { position: relative; width: min(560px, 92vw); padding: 34px 40px 30px; color: #2b2436;
+.st-card { position: relative; width: min(600px, 92vw); padding: 30px 40px 26px; color: #2b2436;
   font-family: ${FONT}; filter: drop-shadow(0 6px 10px rgba(50,35,25,.25));
   transform: translateY(18px) rotate(-1.4deg) scale(.96); transition: transform .45s cubic-bezier(.2,1.5,.4,1); }
 .st-veil.show .st-card { transform: rotate(-.5deg); }
 .st-paper { position: absolute; inset: 0; background: #f4ead6; }
-.st-head { position: relative; font-size: 46px; margin: 0 0 18px; color: ${INK}; }
-.st-row { position: relative; margin: 0 0 22px; }
+.st-head { position: relative; font-size: 42px; margin: 0 0 12px; color: ${INK}; }
+.st-row { position: relative; margin: 0 0 16px; }
 .st-label { font-size: 30px; }
 .st-hint { font-size: 19px; color: #7a5a40; margin: 2px 0 10px; }
 .st-opts { display: flex; flex-wrap: wrap; gap: 6px 4px; font-size: 27px; }
@@ -90,12 +90,17 @@ export function createSettingsPanel() {
   btnWrap.appendChild(btn);
   document.body.appendChild(btnWrap);
 
-  // the card
+  // the card: one row per setting, each a row of brush-stroke words
+  const ROWS = [
+    { key: 'paint', label: 'Painting', hint: 'How much the colours run and pool, like wet paint.', opts: PAINT.map((l, i) => [l, i]) },
+    { key: 'covers', label: 'Cover art', hint: 'How strongly album covers are painted over.', opts: ['Off', 'Light', 'Medium', 'Heavy'].map((l, i) => [l, i]) },
+    { key: 'playOnArm', label: 'Start of a song', hint: 'Play when the arm touches the record and it spins, or straight away.', opts: [['When the arm lands', true], ['At once', false]] },
+    { key: 'fps', label: 'Frame rate', hint: 'Show frames per second in the corner.', opts: [['Off', false], ['On', true]] },
+  ];
   const veil = document.createElement('div');
   veil.className = 'st-veil';
   veil.innerHTML = `<div class="st-card"><div class="st-paper"></div><div class="st-head">Settings</div>
-    <div class="st-row"><div class="st-label">Painting</div><div class="st-hint">How much the colours run and pool, like wet paint.</div><div class="st-opts"></div></div>
-    <div class="st-row"><div class="st-label">Frame rate</div><div class="st-hint">Show frames per second in the corner.</div><div class="st-opts st-fps"></div></div>
+    ${ROWS.map(() => '<div class="st-row"><div class="st-label"></div><div class="st-hint"></div><div class="st-opts"></div></div>').join('')}
     <div class="st-foot"></div></div>`;
   document.body.appendChild(veil);
   const card = veil.querySelector('.st-card');
@@ -103,29 +108,27 @@ export function createSettingsPanel() {
   card.addEventListener('click', (e) => e.stopPropagation());
   veil.addEventListener('click', () => close());
 
-  const opts = card.querySelector('.st-opts');
-  const fpsOpts = card.querySelector('.st-fps');
-  const paintWords = PAINT.map((label, i) => {
-    const w = word(label, 23 + i * 5, () => settings.set('paint', i));
-    opts.appendChild(w);
-    return w;
+  const optWords = [];
+  card.querySelectorAll('.st-row').forEach((rowEl, r) => {
+    const row = ROWS[r];
+    rowEl.querySelector('.st-label').textContent = row.label;
+    rowEl.querySelector('.st-hint').textContent = row.hint;
+    const box = rowEl.querySelector('.st-opts');
+    const ws = row.opts.map(([label, value], i) => {
+      const w = word(label, 23 + r * 13 + i * 5, () => settings.set(row.key, value));
+      box.appendChild(w);
+      optWords.push(w);
+      return w;
+    });
+    const mark = () => ws.forEach((w, i) => w.classList.toggle('on', row.opts[i][1] === settings.get(row.key)));
+    mark();
+    settings.on(row.key, mark);
   });
-  const mark = () => paintWords.forEach((w, i) => w.classList.toggle('on', i === settings.get('paint')));
-  mark();
-  settings.on('paint', mark);
-  const fpsWords = ['Off', 'On'].map((label, i) => {
-    const w = word(label, 41 + i * 3, () => settings.set('fps', i === 1));
-    fpsOpts.appendChild(w);
-    return w;
-  });
-  const markFps = () => fpsWords.forEach((w, i) => w.classList.toggle('on', (i === 1) === !!settings.get('fps')));
-  markFps();
-  settings.on('fps', markFps);
 
   const done = word('Done', 31, () => close());
   card.querySelector('.st-foot').appendChild(done);
 
-  const words = [btn, ...paintWords, ...fpsWords, done];
+  const words = [btn, ...optWords, done];
   const paintAll = () => words.forEach((w) => w.paint());
   document.fonts?.ready.then(paintAll);
   requestAnimationFrame(paintAll);

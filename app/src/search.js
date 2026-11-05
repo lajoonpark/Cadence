@@ -2,8 +2,12 @@
 // brush stroke, top centre, with the results dropping down under it as paper slips (the same paper
 // as the now-playing tag in controls.js), the chosen one painted over in terracotta.
 //
-//   const search = createSearch({ music, onPlay });   // music.search(q) -> Promise<items>
+//   const search = createSearch({ music, onPlay, suggest });   // music.search(q) -> Promise<items>
 //   search.open() / close() / toggle() / isOpen()
+//   searchOpen()   is any search bar open (for the wheel-for-volume handlers: while it is, the wheel scrolls the slips)
+//
+// suggest (optional, the mini window): async () => ({ title, items }), shown while the box is empty
+// (the "Listen again" shelf there). The slips scroll when there are more than fit.
 //
 // onPlay(item) is called with the chosen song (the same item shape as a rack item), then the bar closes.
 // While it is open it swallows every key (so the shop's hotkeys and Tab stay quiet) and re-grabs focus
@@ -18,7 +22,7 @@ import { paintedCoverURL } from './coverpaint.js';
 
 const HOT = '#b4503a';           // terracotta on the chosen slip
 const DEBOUNCE = 250;
-const MAX_SLIPS = 7;
+const MAX_SLIPS = 20;          // the slips scroll
 const BAR_H = 88;
 const SLIP_H = 66;
 
@@ -36,7 +40,13 @@ const CSS = `
   caret-color: ${HOT}; letter-spacing: .01em; }
 .cs-input::placeholder { color: #a8957c; }
 .cs-input::selection { background: rgba(180,80,58,.28); }
-.cs-list { margin: -2px 0 0 18px; padding: 0; width: calc(100% - 36px); list-style: none; transition: opacity .2s; }
+.cs-list { margin: -2px 0 0 6px; padding: 2px 12px 18px; width: calc(100% - 12px); box-sizing: border-box; list-style: none; transition: opacity .2s;
+  max-height: calc(100vh - 3.2vh - ${BAR_H}px - 16px); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: rgba(45,49,88,.45) transparent; }
+.cs-list::-webkit-scrollbar { width: 6px; } .cs-list::-webkit-scrollbar-thumb { background: rgba(45,49,88,.45); border-radius: 3px; }
+.cs-head { position: relative; display: inline-block; margin: 0 0 4px 22px; padding: 4px 26px 4px 18px; color: ${PAPER}; font-size: 26px;
+  background-size: 100% 100%; background-image: var(--note); transform: rotate(-1.2deg); }
+.cs-head[hidden] { display: none; }
 .cs-list.stale { opacity: .55; }
 .cs-slipwrap { filter: drop-shadow(0 3px 3px rgba(50,35,25,.2)); margin-top: -1px; opacity: 0; transform: translateY(-14px) rotate(var(--r));
   animation: cs-drop .38s cubic-bezier(.2,1.4,.4,1) forwards; animation-delay: calc(var(--i) * 38ms); cursor: pointer; }
@@ -81,19 +91,23 @@ const mmss = (s) => (s ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).pad
 // A tiny brushed magnifying glass, in indigo.
 const GLASS = `<svg viewBox="0 0 32 32" fill="none" stroke="${INK}" stroke-linecap="round"><circle cx="13" cy="13" r="8.5" stroke-width="3.2"/><path d="M19.5 19.5 L28 28" stroke-width="4.2"/><path d="M9 11 Q10.5 8 13.5 7.5" stroke-width="1.6" opacity=".5"/></svg>`;
 
-export function createSearch({ music, onPlay }) {
+let openCount = 0;
+export const searchOpen = () => openCount > 0;
+
+export function createSearch({ music, onPlay, suggest = null }) {
   const style = document.createElement('style');
   style.textContent = CSS;
   document.head.appendChild(style);
 
   const root = document.createElement('div');
   root.className = 'cs';
-  root.innerHTML = `<div class="cs-bar"><div class="cs-paper">${GLASS}<input class="cs-input" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="search songs" aria-label="Search songs"></div></div><ul class="cs-list"></ul>`;
+  root.innerHTML = `<div class="cs-bar"><div class="cs-paper">${GLASS}<input class="cs-input" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="search songs" aria-label="Search songs"></div></div><div class="cs-head" hidden></div><ul class="cs-list"></ul>`;
   document.body.appendChild(root);
   const bar = root.querySelector('.cs-bar');
   const paper = root.querySelector('.cs-paper');
   const input = root.querySelector('.cs-input');
   const list = root.querySelector('.cs-list');
+  const head = root.querySelector('.cs-head');
   paper.style.clipPath = torn(5, 4);
 
   // Brush strokes are drawn to the final size once the brush font is in (sizes follow the window).
@@ -101,7 +115,7 @@ export function createSearch({ music, onPlay }) {
   const paintStrokes = () => {
     const w = Math.ceil(bar.getBoundingClientRect().width || 0);
     if (!w || strokes.w === w) return;
-    const slipW = Math.ceil(list.getBoundingClientRect().width || w - 36);
+    const slipW = Math.ceil((list.getBoundingClientRect().width || w - 12) - 24);
     strokes = { w, bar: brushStroke(w, BAR_H, INK, 21), hl: brushStroke(slipW + 12, SLIP_H + 4, HOT, 33), note: brushStroke(slipW - 10, SLIP_H - 6, INK, 47) };
     bar.style.backgroundImage = `url(${strokes.bar})`;
     root.style.setProperty('--hl', `url(${strokes.hl})`);
@@ -120,20 +134,25 @@ export function createSearch({ music, onPlay }) {
   let pendingEnter = false;
   const cache = new Map();
 
-  function setHl(i) {
+  function setHl(i, reveal = false) {
     hl = i;
     [...list.children].forEach((el, k) => el.classList.toggle('on', k === i));
+    if (reveal && i >= 0) list.children[i]?.scrollIntoView({ block: 'nearest' });
   }
 
   function note(html) {
+    head.hidden = true;
     list.className = 'cs-list';
     list.innerHTML = `<li class="cs-slipwrap" style="--i:0;--r:-.6deg"><div class="cs-note" style="background-image:var(--note)">${html}</div></li>`;
   }
 
-  function render(items) {
+  function render(items, title = null) {
     shown = items.slice(0, MAX_SLIPS);
+    head.hidden = !title;
+    head.textContent = title ?? '';
     list.className = 'cs-list';
     list.innerHTML = '';
+    list.scrollTop = 0;
     if (!shown.length) { note('nothing found'); hl = -1; return; }
     shown.forEach((item, i) => {
       const r = rng(100 + i * 17);
@@ -161,6 +180,7 @@ export function createSearch({ music, onPlay }) {
       slip.querySelector('.cs-d').textContent = mmss(item.duration);
       li.appendChild(slip);
       li.addEventListener('mouseenter', () => setHl(i));
+      li.addEventListener('mousemove', () => hl !== i && setHl(i)); // after a scroll moved another slip under a still cursor
       li.addEventListener('mousedown', (e) => e.preventDefault()); // keep the typing focus
       li.addEventListener('click', () => pick(i));
       list.appendChild(li);
@@ -181,9 +201,21 @@ export function createSearch({ music, onPlay }) {
     if (pendingEnter) { pendingEnter = false; if (shown.length) pick(0); }
   }
 
+  // the empty box: the suggestions (mini window), or nothing
+  async function showSuggestions() {
+    shown = []; shownFor = null; list.innerHTML = ''; head.hidden = true; pendingEnter = false;
+    if (!suggest) return;
+    const mine = ++seq;
+    try {
+      const s = await suggest();
+      if (mine !== seq || input.value.trim() || !isOpen || !s?.items?.length) return;
+      render(s.items, s.title);
+    } catch (e) { console.warn('[cadence] suggestions failed', e); }
+  }
+
   async function run() {
     const q = input.value.trim();
-    if (!q) { shown = []; shownFor = null; list.innerHTML = ''; pendingEnter = false; return; }
+    if (!q) return showSuggestions();
     if (cache.has(q)) { seq++; apply(cache.get(q), q); return; }
     const mine = ++seq;
     if (!shown.length) note(`looking<span class="cs-dots"><span>.</span><span>.</span><span>.</span></span>`);
@@ -218,11 +250,11 @@ export function createSearch({ music, onPlay }) {
       e.preventDefault();
       if (!shown.length) return;
       const d = e.key === 'ArrowDown' ? 1 : -1;
-      setHl(hl < 0 ? (d > 0 ? 0 : shown.length - 1) : (hl + d + shown.length) % shown.length);
+      setHl(hl < 0 ? (d > 0 ? 0 : shown.length - 1) : (hl + d + shown.length) % shown.length, true);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const q = input.value.trim();
-      if (!q) return;
+      if (!q) { if (shown.length && hl >= 0) pick(hl); return; } // a suggestion chosen with the arrows
       if (shownFor === q && shown.length) pick(hl >= 0 ? hl : 0);
       else { pendingEnter = true; clearTimeout(timer); run(); } // play the top result as soon as it arrives
     }
@@ -244,6 +276,8 @@ export function createSearch({ music, onPlay }) {
     root.classList.add('show');
     input.focus({ preventScroll: true });
     input.select();
+    openCount++;
+    if (!input.value.trim()) showSuggestions();
   }
 
   function close() {
@@ -254,6 +288,7 @@ export function createSearch({ music, onPlay }) {
     pendingEnter = false;
     root.classList.remove('show');
     input.blur();
+    openCount--;
   }
 
   // The hotkey, in the capture phase so nothing in the shop sees it. While open, any key that is not

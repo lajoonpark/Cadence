@@ -38,7 +38,9 @@
 //   fontReady  Promise (brush font loaded).  smooth(rate, dt), easeOut(t), clamp01.
 // ---------------------------------------------------------------------------------------------
 import * as THREE from 'three';
-import { paintCover, coverSeed } from '../coverpaint.js';
+import { paintCover, coverSeed, coverLevel } from '../coverpaint.js';
+import { settings } from '../settings.js';
+import { chooseDiscDir } from './clear.js';
 import { uploadSoon } from '../warmup.js';
 import CoverWorker from '../coverpaint.worker.js?worker&inline';
 import { toon, crisp } from '../materials.js';
@@ -128,17 +130,21 @@ export function getCover(url, size = 256) {
     }
   }
   if (url) {
-    e.loaded = paintOffThread(url, size).then((done) => {
+    // (again when Settings > Cover art changes: every cover already made is repainted in place)
+    e.repaint = () => (e.loaded = paintOffThread(url, size).then((done) => {
       if (!done) return paintHere(url, size, g, tex, e); // no worker, or it could not fetch the picture
+      g.clearRect(0, 0, size, size);
       g.drawImage(done.bitmap, 0, 0);
       done.bitmap.close();
       tex.needsUpdate = true;
       if (coverUploader) uploadSoon(coverUploader, tex); // on the GPU before a rack first shows it
       if (done.color) e.color = new THREE.Color(`rgb(${done.color.join(',')})`).offsetHSL(0, 0.08, -0.04);
-    });
+    }));
+    e.repaint();
   }
   return e;
 }
+settings.on('covers', () => { for (const e of covers.values()) e.repaint?.(); });
 
 // ---- the cover painter worker (coverpaint.worker.js) ----
 let worker, workerJobs = new Map(), workerId = 0;
@@ -168,7 +174,7 @@ function paintOffThread(url, size) {
   return new Promise((res) => {
     const id = ++workerId;
     workerJobs.set(id, res);
-    w.postMessage({ id, url, size });
+    w.postMessage({ id, url, size, level: coverLevel() });
   });
 }
 // the old way: an <img>, painted on the main thread a few per frame
@@ -287,6 +293,11 @@ export class Sleeve {
     this.disc.visible = false;
     this.mesh.add(this.disc);
     this.discY = 0;          // current slide, in sleeve units of 0.31
+    // which way it slides, in the sleeve's x/y plane: up out of the top unless that would pass through
+    // the rack or another record (clear.js; chosen by the core while hovered and again on the click)
+    this.discDir = new THREE.Vector2(0, 1);
+    this.discDirNow = new THREE.Vector2(0, 1);
+    this.clearT = 0;
     this.picking = false;
     this.onGone = null;
   }
@@ -349,14 +360,16 @@ export class Sleeve {
     if (this.empty && !this.picking) return;
     const target = this.picking ? DISC_OUT : DISC_HOVER * this.lift;
     this.discY += (target - this.discY) * smooth(this.picking ? 22 : 12, dt);
-    this.disc.position.y = this.discY * (this.size / SLEEVE);
+    this.discDirNow.lerp(this.discDir, smooth(this.picking ? 20 : 12, dt)).normalize();
+    this.disc.position.set(this.discDirNow.x, this.discDirNow.y, 0).multiplyScalar(this.discY * (this.size / SLEEVE));
     this.disc.visible = this.discY > 0.004;
     if (this.picking && this.discY > DISC_OUT - 0.012) {
       // clear of the sleeve: report its world pose and hide it, the suitcase takes over
       this.picking = false;
       this.empty = true;
       this.discY = DISC_OUT;
-      this.disc.position.y = DISC_OUT * (this.size / SLEEVE);
+      this.discDirNow.copy(this.discDir);
+      this.disc.position.set(this.discDir.x, this.discDir.y, 0).multiplyScalar(DISC_OUT * (this.size / SLEEVE));
       this.disc.updateWorldMatrix(true, false);
       const info = { matrixWorld: this.disc.matrixWorld.clone(), cover: this.bigCover() };
       this.disc.visible = false;
@@ -707,6 +720,12 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         camera.getWorldPosition(core.camLocal); // world: the camera may sit in a rig (main.js)
         root.worldToLocal(core.camLocal);
         def.layout(core, dt, camera, want);
+        // the hovered record's vinyl: which way is clear, in the pose it is in now (re-checked as it lifts)
+        const hs = core.sleeves[want];
+        if (hs && !hs.empty && !hs.picking && (hs.clearT -= dt) <= 0) {
+          hs.clearT = hs.lift > 0.97 ? 0.6 : 0.12;
+          hs.discDir.copy(chooseDiscDir(core, hs));
+        }
         core.sleeves.forEach((s) => { s.mesh.visible = s.appear > 0 && !s.hidden; });
         if (core.tag.mesh.parent) core.tag.mesh.scale.setScalar(0.6 + 0.4 * (core.sleeves[want]?.lift ?? 0));
       },
@@ -723,6 +742,7 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         if (!s || s.empty || s.picking) return false;
         const i = core.hovered;
         s.bump = 1;
+        s.discDir.copy(chooseDiscDir(core, s));
         core.play.picked(s.item);
         s.startPick((disc) => onPick?.(s.item, i, disc));
         return true;

@@ -22,6 +22,7 @@ import { renderOverlay } from '../watercolour.js';
 import { fitObject, ndcBounds } from './fit.js';
 import { createFlights } from './flight.js';
 import { createDiscMachine } from './machine.js';
+import { searchOpen } from '../search.js';
 
 // The case sits in the bottom-left corner, upright: the same three-quarter view as the small window
 // (the deck seen from about 40 degrees up, the front edge level), with a small turn in toward the
@@ -86,6 +87,10 @@ export function createPlayer({ renderer, painter, music, camera }) {
     caption.dock({ left: caseRect.right + GAP, bottom: H - caseRect.bottom, maxWidth: Math.min(440, W - caseRect.right - GAP - margin) });
   }
   layout();
+  // the box the painter keeps at full quality while the camera travels (watercolour.js), CSS px
+  overlay.hiRect = () => caseRect && {
+    left: caseRect.left - 24, right: caseRect.right + 24, top: caseRect.top - 40, bottom: caseRect.bottom + 24,
+  };
 
   music.onState((s) => {
     suitcase.setState(s);
@@ -126,7 +131,7 @@ export function createPlayer({ renderer, painter, music, camera }) {
   document.addEventListener('pointerleave', () => { pointer = null; over = false; suitcase.hover(null); });
   // scroll over the case = volume (the shop's own scroll-for-volume keeps working elsewhere)
   addEventListener('wheel', (e) => {
-    if (!shown || !over || !onCanvas(e)) return;
+    if (!shown || !over || !onCanvas(e) || searchOpen()) return;
     suitcase.wheel(e.deltaY, e.deltaMode);
     e.stopPropagation();
   }, { capture: true, passive: true });

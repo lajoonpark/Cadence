@@ -124,6 +124,7 @@ function fakeMusic() {
   }, 250);
   const commands = {
     toggle: () => { if (st.videoId) st.playerState = st.playerState === 1 ? 2 : 1; },
+    pause: () => { if (st.videoId) st.playerState = 2; },
     next: () => queue.length && load(at + 1),
     previous: () => queue.length && (st.position > 3 ? (st.position = 0) : load(at - 1)),
     seek: (s) => { st.position = Math.max(0, Math.min(st.duration, s)); },

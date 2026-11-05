@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, createSign, addBox, paint, WOOD, THICK } from './common.js';
+import { stagePath } from './pop.js';
 
 const SZ = 0.33;
 const PER_STEP = 3, PAGE = 9;
@@ -18,6 +19,7 @@ const WASH = ['#4f7a74', '#d9a64a', '#b4503a'];
 export function createEaselRack({ onPick }) {
   const core = createRackCore({ onPick, sign: { w: 1.0, h: 0.13 }, tag: { w: 0.36, h: 0.106 }, sleeve: { size: SZ, thick: 0.014 } });
   const rest = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+  const restP = new THREE.Vector3(), exitP = new THREE.Vector3(), hoverP = new THREE.Vector3();
   let page = 0, pages = 1;
   const plates = {};   // 'back' / 'more' -> { cold, hot }
 
@@ -61,6 +63,8 @@ export function createEaselRack({ onPick }) {
       const tier = tiers[row];
       const t = LEAN + (s.seed % 5 - 2) * 0.012;
       s.tilt = t;
+      s.tier = tier;
+      s.inFront = row > 0 ? tiers[row - 1] : -1; // the step in front of its own (-1: it is the front one)
       s.rx = (col - (inRow - 1) / 2) * PITCH;
       s.ry = TIER_Y[tier] + 0.035 + half * Math.cos(t);
       s.rz = TIER_Z[tier] + STEP_D / 2 - 0.05 - half * Math.sin(t);
@@ -106,15 +110,19 @@ export function createEaselRack({ onPick }) {
       c.sleeves.forEach((s) => {
         if (s.hidden) return;
         const L = s.lift, m = s.mesh;
-        const hx = s.rx, hy = s.ry + (0.44 - s.ry) * 0.6, hz = s.rz + (0.5 - s.rz) * 0.5;
-        m.position.set(
-          s.rx + (hx - s.rx) * L,
-          s.ry + (hy - s.ry) * L + s.drop * 0.7 + 0.04 * s.peek + 0.06 * Math.sin(s.bump * Math.PI),
-          s.rz + (hz - s.rz) * L + 0.03 * s.peek,
-        );
+        restP.set(s.rx, s.ry + 0.04 * s.peek + 0.06 * Math.sin(s.bump * Math.PI), s.rz + 0.03 * s.peek);
+        hoverP.set(s.rx, s.ry + (0.44 - s.ry) * 0.6, s.rz + (0.5 - s.rz) * 0.5);
+        // a record on a back step first rises until its bottom edge clears the records on the step in
+        // front, comes forward over them, and only then turns to you
+        const half = SZ / 2;
+        const frontTop = s.inFront < 0 ? -1 : TIER_Y[s.inFront] + 0.035 + SZ * Math.cos(LEAN) + 0.03;
+        const up = Math.max(0.08, frontTop - (s.ry - half * Math.cos(s.tilt)));
+        exitP.set(s.rx, restP.y + up, restP.z + (s.inFront < 0 ? 0.05 : 0));
+        const T = stagePath(m.position, L, restP, exitP, hoverP, { lead: s.inFront < 0 ? 1 : 1.8 });
+        m.position.y += s.drop * 0.7;
         const face = -Math.atan2(cam.y - m.position.y, Math.max(0.3, cam.z - m.position.z));
-        m.rotation.set(-s.tilt * (1 - L) + face * L, 0, s.roll * (1 - L));
-        m.scale.setScalar(1 + 0.05 * L);
+        m.rotation.set(-s.tilt * (1 - T) + face * T, 0, s.roll * (1 - T));
+        m.scale.setScalar(1 + 0.05 * T);
       });
       for (const [id, k] of [['back', 0], ['more', 1]]) {
         const p = plates[id];

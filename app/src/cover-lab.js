@@ -1,4 +1,4 @@
-// Dev page: each cover as it arrives (left) and painted by coverpaint.js (right).
+// Dev page: each cover as it arrives, then painted by coverpaint.js at Medium and at Heavy (the default).
 // ?url=a,b,c to try other covers. Shots: CADENCE_PAGE=cover-lab.html node scripts/shot.mjs dir 0
 import { paintCover, coverSeed } from './coverpaint.js';
 
@@ -25,13 +25,13 @@ await Promise.all(urls.map(async (url) => {
   document.body.appendChild(fig);
   const img = await load(url);
   if (!img) { fig.textContent = `failed: ${url}`; return; }
-  for (const painted of [false, true]) {
+  for (const level of [0, 2, 3]) { // as it arrives, Medium, Heavy (the default)
     const c = document.createElement('canvas');
     c.width = c.height = SIZE;
     const g = c.getContext('2d');
     const s = Math.min(img.width, img.height);
     g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, SIZE, SIZE);
-    if (painted) paintCover(g, SIZE, coverSeed(url));
+    if (level) paintCover(g, SIZE, coverSeed(url), level);
     fig.appendChild(c);
   }
 }));

@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, addBox, instancedBoxes, paint, WOOD, SLEEVE, THICK } from './common.js';
+import { stagePath } from './pop.js';
 
 const PITCH = 0.43;      // cube centre to centre
 const INNER = 0.4;       // clear opening
@@ -25,7 +26,7 @@ export function createCubbyRack({ onPick }) {
   const core = createRackCore({ onPick, sign: { w: 1.1, h: 0.14 }, tag: { w: 0.34, h: 0.1 } });
   const cab = new THREE.Group();
   const rest = new THREE.Matrix4();
-  const tmp = new THREE.Vector3();
+  const restP = new THREE.Vector3(), exitP = new THREE.Vector3();
 
   function buildCabinet(cols, rows, filled, r) {
     cab.removeFromParent();
@@ -107,17 +108,17 @@ export function createCubbyRack({ onPick }) {
       const cam = c.camLocal;
       c.sleeves.forEach((s) => {
         const L = s.lift, m = s.mesh;
-        const p = tmp.copy(s.hover);
         // a little further out and up while it is the playing (empty) sleeve
-        m.position.set(
-          s.cx + (p.x - s.cx) * L,
-          s.cy + (p.y - s.cy) * L + s.drop * 0.7 + 0.025 * s.peek + 0.05 * Math.sin(s.bump * Math.PI),
-          s.cz + (p.z - s.cz) * L + 0.06 * s.peek,
-        );
+        restP.set(s.cx, s.cy + 0.025 * s.peek + 0.05 * Math.sin(s.bump * Math.PI), s.cz + 0.06 * s.peek);
+        // straight out of its cube first, still leaning (its top edge, the back-most point, clears the
+        // front of the cube), then up to the hover spot, turning to face you
+        exitP.set(s.cx, restP.y, Math.max(restP.z, BACK + DEPTH + 0.02 + (SLEEVE / 2) * Math.sin(s.lean)));
+        const T = stagePath(m.position, L, restP, exitP, s.hover);
+        m.position.y += s.drop * 0.7;
         // face the camera when lifted: tip the top toward you or away to match its eye line
         const face = -Math.atan2(cam.y - m.position.y, Math.max(0.3, cam.z - m.position.z));
-        m.rotation.set(-s.lean * (1 - L) + face * L, 0, s.roll * (1 - L));
-        m.scale.setScalar(1 + 0.06 * L);
+        m.rotation.set(-s.lean * (1 - T) + face * T, 0, s.roll * (1 - T));
+        m.scale.setScalar(1 + 0.06 * T);
       });
     },
   });

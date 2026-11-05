@@ -1,12 +1,18 @@
 // Covers painted to match the shop: every album / playlist cover is repainted once, when it loads,
-// as if copied in watercolour. Medium strength: you still know the cover at a glance (faces, titles,
-// big shapes), but fine detail softens, colour runs a little past its edges, the wash dries unevenly
-// with darker rims, paper grain shows through and the margin stays unpainted.
+// as if copied in watercolour. Fine detail softens, colour runs past its edges, the wash dries unevenly
+// with darker rims, paper grain shows through and the margin stays unpainted. How strongly is
+// Settings > Cover art (settings key 'covers', COVER_LEVELS): Off, Light, Medium, Heavy (the default:
+// you still know the cover at a glance, faces, titles, big shapes, but it reads as painted).
 //
-//   paintCover(ctx, size, seed)   repaints the square canvas in place (call after drawing the cover)
+//   paintCover(ctx, size, seed, level)  repaints the square canvas in place (call after drawing the cover)
 //   paintedCoverURL(url, size)    -> Promise<data: URL> of the painted cover (for <img> in the search slips)
 // The racks' covers are painted off the main thread in coverpaint.worker.js (see getCover in racks/common.js).
 import { rng } from './rand.js';
+import { settings } from './settings.js';
+
+// strength multipliers per level (2 = the old "medium" look, tuned first)
+export const COVER_LEVELS = [0, 0.55, 1, 1.75];
+export const coverLevel = () => { const v = settings.get('covers'); return v >= 0 && v < COVER_LEVELS.length ? v : 3; };
 
 const PAPER = '#f4ead6';
 let grain = null;
@@ -38,41 +44,45 @@ function grainCanvas() {
   return c;
 }
 
-export function paintCover(g, size, seed = 1) {
+export function paintCover(g, size, seed = 1, level = coverLevel()) {
+  const S = COVER_LEVELS[level] ?? 1;
+  if (!S) return; // Off: the cover as it is
   const r = rng(seed);
+  const cap = (v) => Math.min(0.92, v);
   const [src, sg] = canvas(size, size);
   sg.drawImage(g.canvas, 0, 0);
   const k = size / 256; // effects are tuned at 256 px
 
   g.save();
   // 1. soften: fine detail melts into the wash (half blurred, so edges still read)
-  g.filter = `blur(${1.1 * k}px)`;
-  g.globalAlpha = 0.55;
+  const more = Math.max(0, S - 1); // how far past Medium
+  g.filter = `blur(${1.1 * (1 + 0.35 * more) * k}px)`;
+  g.globalAlpha = cap(0.55 * Math.min(1, S) + 0.1 * more);
   g.drawImage(src, 0, 0);
 
   // 2. bleed: two blurred copies nudged in different directions, so colour runs past its edges
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < (S > 1 ? 3 : 2); i++) {
     const a = r() * Math.PI * 2;
-    const d = (3 + r() * 3) * k;
-    g.filter = `blur(${4 * k}px)`;
-    g.globalAlpha = 0.2;
+    const d = (3 + r() * 3) * (1 + 0.6 * more) * Math.min(1, S) * k;
+    g.filter = `blur(${4 * Math.min(1, S) * (1 + 0.25 * more) * k}px)`;
+    g.globalAlpha = cap(0.2 * Math.min(1, S) * (1 - 0.15 * more));
     g.drawImage(src, Math.cos(a) * d, Math.sin(a) * d);
   }
   g.filter = 'none';
 
   // 3. uneven drying: a few soft pale blooms with a slightly darker rim where the pigment pooled
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 4 + Math.round(2 * more); i++) {
     const x = r() * size, y = r() * size, rad = (30 + r() * 50) * k;
     const lift = g.createRadialGradient(x, y, 0, x, y, rad);
-    lift.addColorStop(0, 'rgba(255,250,240,.09)');
-    lift.addColorStop(0.8, 'rgba(255,250,240,.04)');
+    lift.addColorStop(0, `rgba(255,250,240,${(0.09 * (S + 0.5 * more)).toFixed(3)})`);
+    lift.addColorStop(0.8, `rgba(255,250,240,${(0.04 * (S + 0.5 * more)).toFixed(3)})`);
     lift.addColorStop(1, 'rgba(255,250,240,0)');
     g.globalAlpha = 1;
     g.globalCompositeOperation = 'screen';
     g.fillStyle = lift;
     g.fillRect(0, 0, size, size);
     g.globalCompositeOperation = 'multiply';
-    g.strokeStyle = 'rgba(120,90,70,.09)';
+    g.strokeStyle = `rgba(120,90,70,${cap(0.09 * Math.min(1, S) * (1 + 0.3 * more)).toFixed(3)})`;
     g.lineWidth = (2 + r() * 2) * k;
     g.filter = `blur(${1.2 * k}px)`;
     g.beginPath();
@@ -89,13 +99,13 @@ export function paintCover(g, size, seed = 1) {
 
   // 4. the colours are a transparent wash over paper: lift a touch toward the paper
   g.globalCompositeOperation = 'source-over';
-  g.globalAlpha = 0.08;
+  g.globalAlpha = cap(0.08 * S);
   g.fillStyle = PAPER;
   g.fillRect(0, 0, size, size);
 
   // 5. paper grain, pigment settling in the tooth
   g.globalCompositeOperation = 'multiply';
-  g.globalAlpha = 0.6;
+  g.globalAlpha = cap(0.6 * Math.min(1, S) + 0.15 * more);
   const pat = g.createPattern(grainCanvas(), 'repeat');
   g.translate(r() * 256, r() * 256);
   g.fillStyle = pat;
@@ -139,7 +149,8 @@ export function coverSeed(url = '') {
 
 const urls = new Map();
 export function paintedCoverURL(url, size = 96) {
-  const key = `${size}|${url}`;
+  const level = coverLevel();
+  const key = `${size}|${level}|${url}`;
   if (!urls.has(key)) {
     urls.set(key, new Promise((res) => {
       const img = new Image();
@@ -148,7 +159,7 @@ export function paintedCoverURL(url, size = 96) {
         const [c, g] = canvas(size, size);
         const s = Math.min(img.width, img.height);
         g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
-        paintCover(g, size, coverSeed(url));
+        paintCover(g, size, coverSeed(url), level);
         try { res(c.toDataURL('image/jpeg', 0.9)); } catch { res(url); } // tainted: show it unpainted
       };
       img.onerror = () => res(url);

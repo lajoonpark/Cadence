@@ -39,6 +39,8 @@
 // ---------------------------------------------------------------------------------------------
 import * as THREE from 'three';
 import { paintCover, coverSeed } from '../coverpaint.js';
+import { uploadSoon } from '../warmup.js';
+import CoverWorker from '../coverpaint.worker.js?worker&inline';
 import { toon, crisp } from '../materials.js';
 import { rng } from '../rand.js';
 import { brushStroke, INK, PAPER } from '../controls.js';
@@ -75,6 +77,26 @@ function averageColor(img) {
   return new THREE.Color(`rgb(${Math.round(R / n)},${Math.round(G / n)},${Math.round(B / n)})`).offsetHSL(0, 0.08, -0.04);
 }
 
+// ---- cover painting, a few per frame ----
+const PAINT_BUDGET = 4; // ms per frame
+const paintQueue = [];
+let paintPumping = false;
+function paintSoon(fn) {
+  paintQueue.push(fn);
+  if (!paintPumping) { paintPumping = true; requestAnimationFrame(paintPump); }
+}
+function paintPump() {
+  const t0 = performance.now();
+  while (paintQueue.length) {
+    paintQueue.shift()();
+    if (performance.now() - t0 > PAINT_BUDGET) break;
+  }
+  if (paintQueue.length) requestAnimationFrame(paintPump); else paintPumping = false;
+}
+// main.js hands over the renderer, so freshly painted covers are uploaded ahead of time (warmup.js)
+let coverUploader = null;
+export function setCoverUploader(renderer) { coverUploader = renderer; }
+
 // Square cover texture from any thumbnail. Cached by URL and size; textures are shared by every
 // sleeve that shows the same art, so never dispose them yourself.
 export function getCover(url, size = 256) {
@@ -106,23 +128,71 @@ export function getCover(url, size = 256) {
     }
   }
   if (url) {
-    e.loaded = new Promise((res) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = async () => {
-        try { await img.decode(); } catch { /* decoded on draw instead */ } // off the main thread
+    e.loaded = paintOffThread(url, size).then((done) => {
+      if (!done) return paintHere(url, size, g, tex, e); // no worker, or it could not fetch the picture
+      g.drawImage(done.bitmap, 0, 0);
+      done.bitmap.close();
+      tex.needsUpdate = true;
+      if (coverUploader) uploadSoon(coverUploader, tex); // on the GPU before a rack first shows it
+      if (done.color) e.color = new THREE.Color(`rgb(${done.color.join(',')})`).offsetHSL(0, 0.08, -0.04);
+    });
+  }
+  return e;
+}
+
+// ---- the cover painter worker (coverpaint.worker.js) ----
+let worker, workerJobs = new Map(), workerId = 0;
+function coverWorker() {
+  if (worker !== undefined) return worker;
+  worker = null;
+  try {
+    if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return null;
+    worker = new CoverWorker();
+    worker.onmessage = ({ data }) => {
+      const job = workerJobs.get(data.id);
+      workerJobs.delete(data.id);
+      job?.(data.error ? null : data);
+    };
+    worker.onerror = () => { // the worker itself broke: everything still waiting is painted here instead
+      for (const job of workerJobs.values()) job(null);
+      workerJobs.clear();
+      worker?.terminate(); worker = null;
+    };
+  } catch { worker = null; }
+  return worker;
+}
+// resolves { bitmap, color } or null (then paint on the main thread)
+function paintOffThread(url, size) {
+  const w = coverWorker();
+  if (!w) return Promise.resolve(null);
+  return new Promise((res) => {
+    const id = ++workerId;
+    workerJobs.set(id, res);
+    w.postMessage({ id, url, size });
+  });
+}
+// the old way: an <img>, painted on the main thread a few per frame
+function paintHere(url, size, g, tex, e) {
+  return new Promise((res) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = async () => {
+      try { await img.decode(); } catch { /* decoded on draw instead */ } // off the main thread
+      // painting a cover is a few ms of canvas work, and a shelf's worth arrives at once (often
+      // during the intro push-in), so they are painted in small slices, a few per frame
+      paintSoon(() => {
         const s = Math.min(img.width, img.height);
         g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
         paintCover(g, size, coverSeed(url));
         tex.needsUpdate = true;
+        if (coverUploader) uploadSoon(coverUploader, tex); // on the GPU before a rack first shows it
         if (size <= 256) { try { e.color = averageColor(img); } catch { /* tainted canvas: keep the default spine */ } }
         res();
-      };
-      img.onerror = res;
-      img.src = url;
-    });
-  }
-  return e;
+      });
+    };
+    img.onerror = res;
+    img.src = url;
+  });
 }
 
 // ---- big covers, ahead of time ----

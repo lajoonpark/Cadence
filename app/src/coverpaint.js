@@ -5,12 +5,15 @@
 //
 //   paintCover(ctx, size, seed)   repaints the square canvas in place (call after drawing the cover)
 //   paintedCoverURL(url, size)    -> Promise<data: URL> of the painted cover (for <img> in the search slips)
+// The racks' covers are painted off the main thread in coverpaint.worker.js (see getCover in racks/common.js).
 import { rng } from './rand.js';
 
 const PAPER = '#f4ead6';
 let grain = null;
 
+// also runs in coverpaint.worker.js, where there is no document: OffscreenCanvas there
 function canvas(w, h) {
+  if (typeof document === 'undefined') { const c = new OffscreenCanvas(w, h); return [c, c.getContext('2d')]; }
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   return [c, c.getContext('2d')];

@@ -387,7 +387,11 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
       },
     };
     w.setSize(renderer.getDrawingBufferSize(new THREE.Vector2()));
-    for (const [, p] of w.steps) renderer.compile(p.sc, postCam); // no shader-compile hitch the first time it runs
+    // no shader-compile hitch the first time it runs (compiled for the target it draws into: a
+    // screen-variant program would not be reused)
+    const prev = renderer.getRenderTarget();
+    for (const [t, p] of w.steps) { renderer.initRenderTarget(t); renderer.setRenderTarget(t); renderer.compile(p.sc, postCam); }
+    renderer.setRenderTarget(prev);
     return w;
   }
   // blends lite (k = 1) over full (k = 0) while the two hand over
@@ -399,6 +403,7 @@ uniform float k;
 varying vec2 vUv;
 void main() { gl_FragColor = mix(texture2D(tA, vUv), texture2D(tB, vUv), k); }
 `, {}, { tA: { value: null }, tB: { value: null }, k: { value: 0 } });
+  { const prev = renderer.getRenderTarget(); renderer.initRenderTarget(mixT); renderer.setRenderTarget(mixT); renderer.compile(mixP.sc, postCam); renderer.setRenderTarget(prev); } // first used as the intro ends: compile it now
   let lite = null;
   let motion = false, motionK = 0, lastT = null, sawFrame = false;
   function buildWash() {
@@ -415,6 +420,7 @@ void main() { gl_FragColor = mix(texture2D(tA, vUv), texture2D(tB, vUv), k); }
     lite = makeWash(0.5);
     const s = washSize(renderer.getDrawingBufferSize(new THREE.Vector2()), wash.scale);
     mixT.setSize(s.x, s.y);
+    renderer.initRenderTarget(mixT); // allocated now, not in the frame the intro ends
     material.uniforms.tWash.value = wash.texture;
   }
   function renderWash(t, sync) {
@@ -491,5 +497,7 @@ void main() { gl_FragColor = mix(texture2D(tA, vUv), texture2D(tB, vUv), k); }
     // the camera is travelling (intro, flights): paint with the cheap half-size washes until it stops
     setMotion(on) { motion = !!on; },
     get level() { return level; },
+    // where the world is drawn: warm-up compiles must use it too (it picks the shader's output variant)
+    get target() { return target; },
   };
 }

@@ -6,7 +6,8 @@ import { createWatercolour, renderOverlay } from './watercolour.js';
 import { createSky } from './sky.js';
 import { createTimeOfDay } from './timeofday.js';
 import { createRack } from './racks/index.js';
-import { getCover } from './racks/common.js';
+import { getCover, setCoverUploader } from './racks/common.js';
+import { warmUp } from './warmup.js';
 import { STATIONS, HOME, assignShelves } from './stations.js';
 import { createNav, AT_HOME } from './nav.js';
 import { createMenu } from './menu.js';
@@ -26,13 +27,16 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// PCF, not PCFSoft: three r18x swaps PCFSoft for PCF at the first shadow render, which changed every
+// shader's cache key then and made the whole scene compile twice (once more mid-intro)
+renderer.shadowMap.type = THREE.PCFShadowMap;
 // The sun's 4096 px shadow map is a second full render of the scene. It is redrawn only when
 // something that casts it changes: the sun moves, the door opens, records lift at a rack (see updateShadows).
 renderer.shadowMap.autoUpdate = false;
 renderer.shadowMap.needsUpdate = true;
 document.body.appendChild(renderer.domElement);
 const painter = WATERCOLOUR ? createWatercolour(renderer) : null;
+setCoverUploader(renderer); // painted covers go to the GPU in small slices, before a rack shows them
 
 const scene = new THREE.Scene();
 const skyColor = new THREE.Color('#f4c98a');
@@ -112,6 +116,7 @@ function ensureRack(i) {
   rack.root.position.copy(st.pos);
   rack.root.rotation.y = st.rotY;
   rack.setPlaying(playingId);
+  rack.root.visible = false; // shown by buildRack once its shaders are ready
   scene.add(rack.root);
   racks[i] = rack;
   return rack;
@@ -154,17 +159,22 @@ let shelvesLoaded = false;
 // Every frame while the door swings or records move (hover lift, pick, a shelf dropping in), at
 // SHADOW_HZ; otherwise only when the sun has moved a little (it creeps with the real clock).
 const SHADOW_HZ = 20;
-let shadowBusyUntil = 0, shadowLastAt = -1, shadowDoor = -1, shadowHover = -2;
+let shadowOwed = false, shadowBusyUntil = 0, shadowLastAt = -1, shadowDoor = -1, shadowHover = -2;
 const shadowSun = new THREE.Vector3(), shadowSunOn = { v: null };
 const shadowsBusy = (sec = 1.2) => { shadowBusyUntil = Math.max(shadowBusyUntil, curT + sec); };
 function updateShadows(t) {
   const door = nav.doorOpen(t), hov = currentRack()?.hovered ?? -1;
   // the door swinging during the intro redraws shadows only once it has stopped (a 4096 map at 20 Hz
   // was a big share of the push-in's frame drops); a door moving later (a skip) still updates live
-  if (door !== shadowDoor) { shadowDoor = door; if (!nav.intro || door >= 1) shadowsBusy(0.2); }
+  // During the intro nothing else redraws it either: racks filling in (the shelves often arrive
+  // mid push-in) are owed one redraw, done when the intro ends.
+  let doorDone = false;
+  if (door !== shadowDoor) { shadowDoor = door; if (!nav.intro) shadowsBusy(0.2); else doorDone = door >= 1; }
   if (hov !== shadowHover) { shadowHover = hov; shadowsBusy(); }
   const sunMoved = sun.position.distanceToSquared(shadowSun) > 0.05 * 0.05 || sun.castShadow !== shadowSunOn.v;
-  const due = t < shadowBusyUntil && t - shadowLastAt >= 1 / SHADOW_HZ;
+  let due = t < shadowBusyUntil && t - shadowLastAt >= 1 / SHADOW_HZ;
+  if (nav.intro) { if (due) shadowOwed = true; due = doorDone; }
+  else if (shadowOwed) { due = true; shadowOwed = false; }
   if (sunMoved || due || shadowLastAt < 0) {
     renderer.shadowMap.needsUpdate = true;
     shadowLastAt = t;
@@ -172,18 +182,47 @@ function updateShadows(t) {
   }
 }
 
+// Building a rack (sleeves, tags, covers) and compiling its shaders is far too much for one frame,
+// and the shelves usually come in while the intro pushes in, so each station is queued and built
+// one per frame (runFillJob); a built rack stays hidden until its shaders have compiled in the
+// background, so it never stalls a frame. Screenshots (?shot) build straight away.
+const fillJobs = new Map(); // station index -> shelf waiting to be built
+let fillGen = 0;            // bumps when a station is refilled or cleared, so a stale reveal is dropped
+const fillGens = new Map();
 function fill(i, shelf) {
   const key = shelfKey(shelf);
   if (placed.get(i)?.key === key) return;
+  placed.set(i, { key, title: shelf.title });
+  fillJobs.set(i, shelf);
+  if (shotMode) runFillJob(Infinity);
+}
+function buildRack(i, shelf) {
   const rack = ensureRack(i);
   rack.setShelf(shelf);
-  rack.root.visible = true;
-  shadowsBusy(2); // the records drop in
-  if (i === nav.at) warm();
-  placed.set(i, { key, title: shelf.title });
-  if (furniture[STATIONS[i].id]) furniture[STATIONS[i].id].visible = false;
+  const gen = ++fillGen;
+  fillGens.set(i, gen);
+  const reveal = () => {
+    if (fillGens.get(i) !== gen) return;
+    rack.root.visible = true;
+    shadowsBusy(2); // the records drop in
+    if (i === nav.at) warm();
+    if (furniture[STATIONS[i].id]) furniture[STATIONS[i].id].visible = false;
+  };
+  if (shotMode || rack.root.visible) { reveal(); return; } // a refill of a rack on show swaps in place
+  rack.root.visible = false;
+  const ready = warmUp(renderer, rack.root, camera, scene, painter?.target ?? null);
+  Promise.race([ready, new Promise((r) => setTimeout(r, 1500))]).then(reveal, reveal);
+}
+function runFillJob(n = 1) {
+  for (const [i, shelf] of fillJobs) {
+    if (n-- <= 0) return;
+    fillJobs.delete(i);
+    buildRack(i, shelf);
+  }
 }
 function clearStation(i) {
+  fillJobs.delete(i);
+  fillGens.delete(i);
   if (racks[i]) racks[i].root.visible = false;
   shadowsBusy(0.2);
   if (furniture[STATIONS[i].id]) furniture[STATIONS[i].id].visible = true;
@@ -516,6 +555,7 @@ function frame(t, dtOverride, draw = true) {
   timeOfDay.update(t);
   const pose = nav.update(t, dt);
   if (!everPlaced && nav.introDone) placeFirst(); // the camera reached home before the last page came in
+  runFillJob();
   const c = pinnedPose ?? pose;
   rig.position.copy(c.pos);
   if (skylightBeam) {
@@ -620,6 +660,14 @@ if (shotMode) {
   };
   window.__ready = true;
 } else {
-  const start = performance.now() - (Number(params.get('t')) || 0) * 1000;
-  renderer.setAnimationLoop(() => { tickFps(); frame((performance.now() - start) / 1000); });
+  // Compile the whole scene (hidden parts too) and the suitcase overlay in the background first, and
+  // only then start the clock, so the intro never stops for a shader. Capped at 4 s just in case.
+  const warmed = Promise.all([
+    warmUp(renderer, scene, camera, scene, painter?.target ?? null),
+    warmUp(renderer, suitcase.overlay.scene, suitcase.overlay.camera, suitcase.overlay.scene, painter?.target ?? null, { draw: true }),
+  ]);
+  Promise.race([warmed, new Promise((r) => setTimeout(r, 4000))]).catch(() => {}).then(() => {
+    const start = performance.now() - (Number(params.get('t')) || 0) * 1000;
+    renderer.setAnimationLoop(() => { tickFps(); frame((performance.now() - start) / 1000); });
+  });
 }

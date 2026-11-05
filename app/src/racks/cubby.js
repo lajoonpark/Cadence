@@ -94,7 +94,9 @@ export function createCubbyRack({ onPick }) {
         const lean = 0.15 + (r() - 0.5) * 0.04;
         s.cx = cx - sides[i] * 0.04 + (r() - 0.5) * 0.02;
         s.cy = floor + (SLEEVE / 2) * Math.cos(lean) + THICK / 2;
-        s.cz = BACK + 0.012 + (SLEEVE / 2) * Math.sin(lean);
+        // its top back corner rests just in front of the cube's back wash (front face BACK + 0.024),
+        // so the wash never cuts across the top of the cover
+        s.cz = BACK + 0.028 + (THICK / 2) * Math.cos(lean) + (SLEEVE / 2) * Math.sin(lean);
         s.lean = lean;
         s.roll = (r() - 0.5) * 0.04;
         // kept inside the frame: the bottom row would otherwise lift its card and tag off the screen

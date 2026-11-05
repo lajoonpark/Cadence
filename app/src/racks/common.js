@@ -277,8 +277,9 @@ const sleeveGeo = (size, thick) => {
   return geoCache.get(k);
 };
 
-// How far the vinyl is slid up (in a 0.31 m sleeve): peeking while hovered, completely clear to pick.
-const DISC_HOVER = 0.11, DISC_OUT = 0.31;
+// How far the vinyl slides out (in a 0.31 m sleeve) to be picked: completely clear. It stays inside
+// while hovered; it only shows when it is picked (out to the suitcase) or comes back.
+const DISC_OUT = 0.31;
 // lift spring: angular frequency (1/s) and damping. Critically damped both ways: any overshoot carries
 // the record past its hover pose along the curve, into the spinner post (scripts/pass-check.mjs)
 const LIFT_W = 19, LIFT_Z = 1, LIFT_W_DOWN = 21;
@@ -314,10 +315,9 @@ export class Sleeve {
     this.mesh.add(this.disc);
     this.discY = 0;          // current slide, in sleeve units of 0.31
     // which way it slides, in the sleeve's x/y plane: up out of the top unless that would pass through
-    // the rack or another record (clear.js; chosen by the core while hovered and again on the click)
+    // the rack or another record (clear.js; chosen by the core on the click)
     this.discDir = new THREE.Vector2(0, 1);
     this.discDirNow = new THREE.Vector2(0, 1);
-    this.clearT = 0;
     this.picking = false;
     this.onGone = null;
   }
@@ -380,9 +380,7 @@ export class Sleeve {
     if (!this.hot && hovered) this.setHot(true);
     else if (this.hot && !hovered && this.lift < 0.02) this.setHot(false);
     if (this.empty && !this.picking) return;
-    // the vinyl peeks only once the sleeve is nearly up (one move after the other, not both at once)
-    const peekL = Math.min(1, Math.max(0, (this.lift - 0.7) / 0.3));
-    const target = this.picking ? DISC_OUT : DISC_HOVER * peekL * peekL * (3 - 2 * peekL);
+    const target = this.picking ? DISC_OUT : 0;
     this.discY += (target - this.discY) * smooth(this.picking ? 22 : 12, dt);
     this.discDirNow.lerp(this.discDir, smooth(this.picking ? 20 : 12, dt)).normalize();
     this.disc.position.set(this.discDirNow.x, this.discDirNow.y, 0).multiplyScalar(this.discY * (this.size / SLEEVE));
@@ -744,15 +742,6 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         camera.getWorldPosition(core.camLocal); // world: the camera may sit in a rig (main.js)
         root.worldToLocal(core.camLocal);
         def.layout(core, dt, camera, want);
-        // the hovered record's vinyl: which way is clear, in the pose it is in now (re-checked as it lifts)
-        const hs = core.sleeves[want];
-        // the way is only re-picked while the vinyl is still inside the sleeve, so it never swings round
-        // mid-slide; it is first picked as the sleeve nears its hover pose (where it will slide)
-        if (hs && !hs.empty && !hs.picking && hs.discY < 0.005 && hs.lift > 0.6 && (hs.clearT -= dt) <= 0) {
-          hs.clearT = 0.15;
-          hs.discDir.copy(chooseDiscDir(core, hs));
-          hs.discDirNow.copy(hs.discDir);
-        }
         core.sleeves.forEach((s) => { s.mesh.visible = s.appear > 0 && !s.hidden; });
         if (core.tag.mesh.parent) core.tag.mesh.scale.setScalar(0.6 + 0.4 * (core.sleeves[want]?.lift ?? 0));
       },
@@ -769,7 +758,7 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         if (!s || s.empty || s.picking) return false;
         const i = core.hovered;
         s.bump = 1;
-        // keep the way it is already peeking if that is clear enough; a fresh pick only when not out yet
+        // which way is clear, in the pose it is in now (only when not already sliding back in)
         if (s.discY < 0.005) { s.discDir.copy(chooseDiscDir(core, s)); s.discDirNow.copy(s.discDir); }
         core.play.picked(s.item);
         s.startPick((disc) => onPick?.(s.item, i, disc));

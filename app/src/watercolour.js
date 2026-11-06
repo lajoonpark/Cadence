@@ -22,7 +22,7 @@ const LEVELS = [
   { radius: 6, bleed: 20, bleedMix: 0.9, bloom: 1.0, edge: 0.7, lift: 0.15 },
   // Brush strokes (brushstrokes.js): the world is repainted stroke by stroke, then the strokes run into
   // each other along the same bleed. radius/lift also set how the suitcase overlay is washed, as above.
-  { strokes: true, radius: 6, bleed: 24, bleedMix: 0.8, bloom: 1.0, edge: 0.55, lift: 0.05, grain: 0.4 },
+  { strokes: true, radius: 6, bleed: 10, bleedMix: 0.4, bloom: 1.0, edge: 0.55, lift: 0.05, grain: 0.4 },
 ];
 const LAST_WASH_LEVEL = 3; // the small card window holds only the suitcase, which strokes would swallow
 export const PAINT_LEVELS = LEVELS.length;

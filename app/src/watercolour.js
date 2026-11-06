@@ -437,6 +437,10 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
   // Brush mode: the world alone goes through here (the overlay is drawn after). Prep is mip-mapped: each
   // stroke reads its colour from the level matching its size.
   let brush = null;
+  // Every view strokes were placed from, kept so they can be placed again if the brush is rebuilt
+  // (a level change, a move to a screen with another pixel ratio).
+  const strokeViews = [];
+  let strokeWorld = null;
   function makeBrush() {
     const scale = washScale();
     const ws = washSize(renderer.getDrawingBufferSize(new THREE.Vector2()), scale);
@@ -444,7 +448,7 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
     const paintT = new THREE.WebGLRenderTarget(ws.x, ws.y, { type: THREE.HalfFloatType, depthBuffer: false });
     const bleedT = new THREE.WebGLRenderTarget(ws.x, ws.y, { type: THREE.HalfFloatType, depthBuffer: false });
     const prepP = pass(prepShader, {}, { tScene: { value: target.texture } });
-    const strokes = createBrushStrokes(renderer, refT.texture);
+    const strokes = createBrushStrokes(renderer, refT.texture, target.depthTexture);
     const bleedP = pass(bleedShader, { BLEED: (L.bleed * scale).toFixed(2), BLEED_MIX: L.bleedMix.toFixed(2), FRAG: (1 / scale).toFixed(4) }, {
       tWash: { value: paintT.texture }, texel: { value: new THREE.Vector2() },
       paperOffset: material.uniforms.paperOffset, seed: material.uniforms.seed,
@@ -453,8 +457,10 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
     const b = {
       scale,
       texture: bleedT.texture,
-      render(pan, sync) {
+      strokes,
+      render(pan, camera, sync) {
         strokes.setPan(pan.x, pan.y);
+        strokes.setCamera(camera);
         for (const [t, sc, name] of steps) { renderer.setRenderTarget(t); renderer.render(sc, postCam); sync?.(name); }
       },
       setSize(full) {
@@ -506,6 +512,7 @@ void main() {
     wash = makeWash(1);
     if (L.strokes) {
       brush = makeBrush();
+      if (strokeViews.length) brush.strokes.bake(strokeWorld, strokeViews);
       material.uniforms.tWash.value = brush.texture;
       material.uniforms.tOver.value = wash.texture;
       return;
@@ -579,13 +586,22 @@ void main() {
   }
   if (follow) settings.on('paint', setLevel);
 
+  function bakeStrokes(world, views) {
+    strokeWorld = world;
+    strokeViews.push(...views);
+    if (brush) brush.strokes.bake(world, views);
+  }
+
   return {
+    // Brush mode: views ([{ pos, target, fov }]) the camera will see, so strokes get placed there, now
+    // (not during a frame). In the other modes they are only kept, for when brush mode is switched on.
+    bakeStrokes,
     // overlay = { scene, camera }: drawn into the same target after the world, depth cleared, so it is
     // painted by the same pass but never hidden by (or clipped into) the walls.
     // sync (profiling only): called after each step with its name, to time it (see __cadenceDebug.profile)
     render(scene, camera, t, overlay, sync) {
       const u = material.uniforms;
-      u.seed.value = (Math.floor(t * BOIL_FPS) % 64) * 1.37;
+      u.seed.value = brush ? 0 : (Math.floor(t * BOIL_FPS) % 64) * 1.37; // dry paint does not boil
       u.near.value = camera.near;
       u.far.value = camera.far;
       // Pan the paper with the camera's turn so cursor tilt moves scene and sheet together
@@ -597,12 +613,18 @@ void main() {
       const pxPerRad = u.resolution.value.y / fovY;
       u.paperOffset.value.set((yaw * pxPerRad) / 512, (pitch * pxPerRad) / 512);
 
+      if (brush) {
+        // a page that named no views gets strokes for what it is looking at
+        if (!strokeViews.length) {
+          bakeStrokes(scene, [{ pos: camera.getWorldPosition(new THREE.Vector3()), target: camera.getWorldPosition(new THREE.Vector3()).add(dir), fov: Math.min(100, camera.fov * 1.2) }]);
+        }
+      }
       renderer.setRenderTarget(target);
       renderer.render(scene, camera);
       if (brush) {
         sync?.('scene');
         pan.set((yaw * pxPerRad) / u.resolution.value.x, (pitch * pxPerRad) / u.resolution.value.y);
-        brush.render(pan, sync);
+        brush.render(pan, camera, sync);
         renderer.setRenderTarget(target);
         renderOverlay(renderer, overlay);
         u.overlayOn.value = overlay ? 1 : 0;

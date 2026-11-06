@@ -70,7 +70,7 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
   the platter and pops away (`src/suitcase/machine.js`; `?machine=1.2` freezes it for screenshots).
 - **Settings**: the SETTINGS word (top right) or **⌘,** (Ctrl+, elsewhere) opens a paper card
   (`src/settings-panel.js`, stored by `src/settings.js` in localStorage, shared with the mini window).
-  *Painting* sets the look: Faint / Light / Medium / Heavy watercolour, or Brush strokes (default), which repaints the world with large strokes (`src/brushstrokes.js`). Faint is the
+  *Painting* sets the look: Faint / Light / Medium / Heavy watercolour, or Brush strokes (default), which repaints the world with large strokes pinned to its surfaces, so they move with the world and stay still when the camera does (`src/brushstrokes.js`; check with `scripts/still-check.mjs`). Faint is the
   old single pass; the others flatten shading into washes and let colour bleed (`LEVELS` in
   `src/watercolour.js`). `?wc=0..3` (or `CADENCE_QUERY="wc=2" npm run dev`) pins a level for screenshots.
   *Smoothness* caps the frame rate at 60 or 30 fps.

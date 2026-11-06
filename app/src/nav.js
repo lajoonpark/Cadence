@@ -47,6 +47,24 @@ function introPose(t, home, out) {
   return out;
 }
 
+// Where the camera will be: the spots brush strokes get placed from (brushstrokes.js).
+export function paintViews(home, stations) {
+  const views = [];
+  const pose = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
+  for (const t of [0, 1.6, 2.4, 3.2, 4, T.push]) {
+    introPose(t, home, pose);
+    views.push({ pos: pose.pos.clone(), target: pose.target.clone() });
+  }
+  views.push({ pos: home.pos, target: home.target });
+  for (const s of stations) {
+    views.push({ pos: s.cam.pos, target: s.cam.target });
+    // on the way there and back
+    views.push({ pos: home.pos.clone().lerp(s.cam.pos, 0.5), target: home.target.clone().lerp(s.cam.target, 0.5) });
+    views.push({ pos: home.pos.clone().lerp(s.cam.pos, 0.5), target: home.pos });
+  }
+  return views;
+}
+
 // ---- routes -----------------------------------------------------------------------------------
 // The shop is one long aisle (x = 0) with an arch in every cross wall, so a route is: leave the
 // station's camera spot, reach the aisle, ride the aisle to the other station's entry, step out to

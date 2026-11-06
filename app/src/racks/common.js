@@ -291,7 +291,7 @@ export class Sleeve {
     this.size = size;
     this.thick = thick;
     this.seed = seed;
-    this.lift = 0; this.liftV = 0; this.peek = 0; this.bump = 0; this.appear = 0; this.drop = 1;
+    this.lift = 0; this.liftV = 0; this.liftRate = 1; this.peek = 0; this.bump = 0; this.appear = 0; this.drop = 1;
     this.empty = false;      // the vinyl is away (playing / being picked)
     this.hot = false;
     this.art = item.art;
@@ -374,7 +374,7 @@ export class Sleeve {
     // lift is a spring, not an exponential chase: it starts soft (no jump on the first frame), gets
     // there about as fast, and lands softly, with no overshoot. Down is a touch quicker
     // and clamped at 0 so a record never sinks into its slot.
-    springTo(this, 'lift', hovered ? 1 : 0, dt, hovered ? LIFT_W : LIFT_W_DOWN, hovered ? LIFT_Z : 1, 0);
+    springTo(this, 'lift', hovered ? 1 : 0, dt, (hovered ? LIFT_W : LIFT_W_DOWN) * this.liftRate, hovered ? LIFT_Z : 1, 0);
     this.peek += ((this.empty ? 1 : 0) - this.peek) * smooth(10, dt);
     this.bump = Math.max(0, this.bump - dt * 3);
     if (!this.hot && hovered) this.setHot(true);

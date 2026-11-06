@@ -1,11 +1,11 @@
 // Station 3, on the shop counter: a painted three-step display stand with an easel frame behind
 // it that carries the shelf's name. Big covers lean on the steps (three per step, nine to a page);
 // a longer shelf is turned with the painted "more" / "back" plates on the stand's front. Hover
-// lifts a cover off its step, out over the counter's edge toward you.
+// brings a cover out over the counter's edge, in front of every row: the front step's come straight
+// forward, the ones behind rise over the row in front first.
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, createSign, addBox, paint, WOOD, THICK } from './common.js';
-import { stagePath } from './pop.js';
 
 const SZ = 0.33;
 const PER_STEP = 3, PAGE = 9;
@@ -15,11 +15,16 @@ const TIER_Z = [0.2, 0.0, -0.2];        // step centres
 const STEP_D = 0.2;
 const LEAN = 0.2;
 const WASH = ['#4f7a74', '#d9a64a', '#b4503a'];
+const HOVER_Z = 0.38;                   // every hovered record ends here, in front of the front row
+const FRONT_UP = 0.04;                  // a front record only rises enough to clear its step's lip
+const CLEAR = 0.05;                     // m a record rising from behind clears the row in front by
+const LIFT_RATE = [1, 0.8, 0.7];        // per step: further to travel, so a little slower
+const ss = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
 export function createEaselRack({ onPick }) {
   const core = createRackCore({ onPick, sign: { w: 1.0, h: 0.13 }, tag: { w: 0.36, h: 0.106 }, sleeve: { size: SZ, thick: 0.014 } });
   const rest = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
-  const restP = new THREE.Vector3(), exitP = new THREE.Vector3(), hoverP = new THREE.Vector3();
+  const restP = new THREE.Vector3();
   let page = 0, pages = 1;
   const plates = {};   // 'back' / 'more' -> { cold, hot }
 
@@ -64,7 +69,7 @@ export function createEaselRack({ onPick }) {
       const t = LEAN + (s.seed % 5 - 2) * 0.012;
       s.tilt = t;
       s.tier = tier;
-      s.inFront = row > 0 ? tiers[row - 1] : -1; // the step in front of its own (-1: it is the front one)
+      s.liftRate = LIFT_RATE[tier];
       s.rx = (col - (inRow - 1) / 2) * PITCH;
       s.ry = TIER_Y[tier] + 0.035 + half * Math.cos(t);
       s.rz = TIER_Z[tier] + STEP_D / 2 - 0.05 - half * Math.sin(t);
@@ -111,14 +116,22 @@ export function createEaselRack({ onPick }) {
         if (s.hidden) return;
         const L = s.lift, m = s.mesh;
         restP.set(s.rx, s.ry + 0.04 * s.peek + 0.06 * Math.sin(s.bump * Math.PI), s.rz + 0.03 * s.peek);
-        hoverP.set(s.rx, s.ry + (0.44 - s.ry) * 0.6, s.rz + (0.5 - s.rz) * 0.5);
-        // a record on a back step first rises until its bottom edge clears the records on the step in
-        // front, comes forward over them, and only then turns to you
-        const half = SZ / 2;
-        const frontTop = s.inFront < 0 ? -1 : TIER_Y[s.inFront] + 0.035 + SZ * Math.cos(LEAN) + 0.03;
-        const up = Math.max(0.08, frontTop - (s.ry - half * Math.cos(s.tilt)));
-        exitP.set(s.rx, restP.y + up, restP.z + (s.inFront < 0 ? 0.05 : 0));
-        const T = stagePath(m.position, L, restP, exitP, hoverP, { lead: s.inFront < 0 ? 1 : 1.8 });
+        const hoverY = s.tier === 0 ? s.ry + FRONT_UP : s.ry + (0.44 - s.ry) * 0.6;
+        let T, y;
+        if (s.tier === 0) {
+          // front step: straight out, with only a small early rise over the lip
+          T = ss(L);
+          y = restP.y + (hoverY - restP.y) * ss(L / 0.35);
+        } else {
+          // a step behind: up until its bottom edge clears the tops of the row in front, forward over
+          // them, and down to its hover height only once it is past them
+          const half = SZ / 2;
+          const frontTop = TIER_Y[s.tier - 1] + 0.035 + SZ * Math.cos(LEAN);
+          const peak = restP.y + frontTop + CLEAR - (s.ry - half * Math.cos(s.tilt));
+          T = ss((L - 0.35) / 0.45);
+          y = restP.y + (peak - restP.y) * ss(L / 0.45) + (hoverY - peak) * ss((L - 0.7) / 0.3);
+        }
+        m.position.set(s.rx, y, restP.z + (HOVER_Z - restP.z) * T);
         m.position.y += s.drop * 0.7;
         const face = -Math.atan2(cam.y - m.position.y, Math.max(0.3, cam.z - m.position.z));
         m.rotation.set(-s.tilt * (1 - T) + face * T, 0, s.roll * (1 - T));

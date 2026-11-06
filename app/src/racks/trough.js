@@ -1,7 +1,8 @@
 // Station 0, the crate-digging table in the hall: sleeves stand in a long trough leaning in a row
 // with their spines to you; slide the cursor along it and the one under it lifts out with a neighbour
-// each side, fanned like a hand of cards, all three facing you. The one under the cursor wears the
-// paper tag with the name. Click to play it.
+// each side, fanned like a hand of cards, all three facing you. The one under the cursor is always the
+// middle one and wears the paper tag with the name: move left and the right one drops back, a new one
+// rises on the left and the three slide over. Click to play it.
 import * as THREE from 'three';
 import { rng } from '../rand.js';
 import { createRackCore, addBox, WOOD, SLEEVE, THICK, springTo } from './common.js';
@@ -13,6 +14,7 @@ const BASE = TABLE_H + 0.03;   // sleeves stand on the trough floor
 const REST_YAW = 1.3;          // mostly edge-on, a sliver of cover showing
 const LIFT = 0.3, FORWARD = 0.22, TILT_BACK = -0.26;
 const FAN = 3, FAN_GAP = 0.27; // records up at once, and how far apart they stand
+const SLIDE = 16;              // spring rate of a record sliding to its new place in the fan
 const RISE = SLEEVE + 0.05;    // straight up this far first, clear of the row, before it turns and fans out
 const ss = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 
@@ -32,7 +34,6 @@ function buildTable(g) {
 export function createTroughRack({ onPick }) {
   const core = createRackCore({ onPick, sign: { w: 1.2, h: 0.15 } });
   const rest = new THREE.Matrix4();
-  let fan = -1;          // the record the fan of three is built around (-1: none up)
 
   return core.contract({
     setup(c) {
@@ -51,6 +52,8 @@ export function createTroughRack({ onPick }) {
         s.x = x0 + i * spacing + (r() - 0.5) * 0.01;
         s.yaw = REST_YAW + (r() - 0.5) * 0.08;
         s.roll = (r() - 0.5) * 0.05;
+        s.fx = s.fxT = s.x;       // where it stands in the fan: now, and heading to
+        s.slot = s.slotT = 0;     // its place in the fan (-1 left, 0 middle, 1 right): now, and heading to
         // thin slab in front of the row (like reading x off the front plane), a little past the ends
         const a = i === 0 ? -0.12 : 0, b = i === n - 1 ? 0.12 : 0;
         const y0 = BASE - 0.05, y1 = BASE + SLEEVE + LIFT + 0.12;
@@ -59,39 +62,31 @@ export function createTroughRack({ onPick }) {
       });
     },
 
-    // Three up at once: the record under the cursor comes up with one neighbour each side, fanned out
-    // like a hand of cards, so each is a big target. The fan stays put while the cursor is on any of
-    // its three (the one under it is the hovered one, with the tag); it moves only when the cursor goes
-    // back down to the row.
-    pick(c, pointer, camera) {
-      const i = c.picker.pick(pointer, camera, c.root);
-      fan = i >= 0 ? i : -1;
-      return i;
-    },
-
+    // Three up at once, centred on the record under the cursor. The cursor is always read against the
+    // row (the fan never catches it), so a straight move sideways scrolls through the records instead of
+    // stopping on the fan. At either end of the row there is no neighbour to raise on that side.
     layout(c, dt, camera, hovered) {
-      const n = c.sleeves.length;
-      if (hovered < 0) fan = -1;            // cursor off the rack (or the rack not active)
-      else if (fan < 0 || fan >= n) fan = hovered; // held by ?hover= for screenshots
-      // the fan: three neighbours around the anchor, kept inside the row
-      const first = fan < 0 ? -1 : Math.max(0, Math.min(n - FAN, fan - 1));
-      const centre = first < 0 ? -1 : first + (Math.min(FAN, n) - 1) / 2;
-      const members = [];
-      if (first >= 0) for (let k = 0; k < Math.min(FAN, n); k++) members.push(first + k);
-      c.held = members;
-      const fanX = first < 0 ? 0 : members.reduce((a, j) => a + c.sleeves[j].x, 0) / members.length;
+      const anchor = c.sleeves[hovered];
       c.sleeves.forEach((s, i) => {
-        const inFan = members.includes(i);
+        const k = i - hovered;
+        const inFan = !!anchor && Math.abs(k) <= (FAN - 1) / 2;
+        if (inFan) {
+          s.slotT = k;
+          s.fxT = anchor.x + k * FAN_GAP;
+          // just coming up: it starts at its place. Already up: it slides there. A record leaving keeps
+          // its last place, so it drops from where it stands.
+          if ((s.fanA ?? 0) < 0.02) { s.slot = k; s.slotV = 0; s.fx = s.fxT; s.fxV = 0; }
+        }
+        springTo(s, 'slot', s.slotT, dt, SLIDE);
+        springTo(s, 'fx', s.fxT, dt, SLIDE);
         springTo(s, 'fanA', inFan ? 1 : 0, dt, inFan ? 15 : 18, inFan ? 0.8 : 1, 0);
         s.held = s.fanA;
-        const k = inFan ? i - centre : 0;
-        if (inFan) s.slot = k;
-        const slot = s.slot ?? 0;
+        const slot = s.slot;
         // the rest of the row stays put: the fan rises straight up out of it, so nothing needs to make
         // room (rows leaning away by different amounts ran into each other)
         s.pushed = 0;
         const F = s.fanA, L = s.lift, m = s.mesh;
-        const fx = fanX + slot * FAN_GAP;                 // where it stands in the fan
+        const fx = s.fx;
         // pulled straight up out of the row first (still edge-on, so it slides past its neighbours),
         // then it turns, steps forward and settles into the fan; down the same way
         // (the three spread apart and step forward before they turn and settle, so they never turn into each

@@ -634,25 +634,15 @@ function createPlayTracker() {
 // ---- rack core ----------------------------------------------------------------------------------
 
 const _hc = new THREE.Raycaster(), _hb = new THREE.Box3(), _wp = new THREE.Vector3();
-// The hovered sleeve, if it is well lifted and the cursor is over it as it is now. Racks can list
-// more sleeves that count as held up (core.held, e.g. a fan of three): the nearest one under the cursor wins.
+// The hovered sleeve, if it is well lifted and the cursor is over it as it is now.
 function heldUnder(core, pointer, camera) {
-  const held = core.held ?? (core.hovered >= 0 ? [core.hovered] : []);
-  if (!held.length) return -1;
+  if (core.hovered < 0) return -1;
   _hc.setFromCamera(pointer, camera);
-  let best = -1, bestD = Infinity;
-  for (const i of held) {
-    const s = core.sleeves[i];
-    if (!s || !s.mesh.visible) continue;
-    if ((s.held ?? s.lift) < 0.5) continue;
-    s.mesh.updateWorldMatrix(true, true);
-    _hb.setFromObject(s.mesh);
-    const hit = _hc.ray.intersectBox(_hb, _wp);
-    if (!hit) continue;
-    const d = hit.distanceToSquared(_hc.ray.origin);
-    if (d < bestD) { bestD = d; best = i; }
-  }
-  return best;
+  const s = core.sleeves[core.hovered];
+  if (!s || !s.mesh.visible || (s.held ?? s.lift) < 0.5) return -1;
+  s.mesh.updateWorldMatrix(true, true);
+  _hb.setFromObject(s.mesh);
+  return _hc.ray.intersectBox(_hb, _wp) ? core.hovered : -1;
 }
 
 export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_ITEMS, sleeve = {}, tagOnSleeve = true } = {}) {
@@ -717,18 +707,11 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         if (forced !== null) want = forced < n ? forced : -1;
         else if (active && pointer && n) {
           const base = () => (def.pick ? def.pick(core, pointer, camera) : core.picker.pick(pointer, camera, root));
-          if (core.held) {
-            // a fan (trough): its records stand well away from their rest spots on purpose, so the fan
-            // keeps the cursor while you are on any of them
-            want = heldUnder(core, pointer, camera);
-            if (want < 0) want = base();
-          } else {
-            // every record keeps its own patch of screen (its rest spot), so a lifted record that has
-            // grown over a neighbour never hides it. The lifted one only catches the cursor where no
-            // other record is (the bit sticking out above the rack): you click the song, not the rack.
-            want = base();
-            if (want < 0) want = heldUnder(core, pointer, camera);
-          }
+          // every record keeps its own patch of screen (its rest spot), so a lifted record that has
+          // grown over a neighbour never hides it. The lifted one only catches the cursor where no
+          // other record is (the bit sticking out above the rack): you click the song, not the rack.
+          want = base();
+          if (want < 0) want = heldUnder(core, pointer, camera);
         }
         // picks >= 1000 are controls of the rack itself (page arrows...): def.control(core, id) on click
         core.control = want >= 1000 ? want - 1000 : -1;

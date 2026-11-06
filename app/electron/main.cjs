@@ -16,7 +16,7 @@ let mini = null;   // the small window (Ctrl+Alt+Space), see mini.cjs
 function startPlayer() {
   ytm = createYtm({
     onState: (s) => { win?.webContents.send('ytm:state', s); mini?.send('ytm:state', s); },   // both windows show the player
-    onSignedIn: () => win?.webContents.send('ytm:signedIn'),
+    onSignedIn: () => { win?.webContents.send('ytm:signedIn'); mini?.send('ytm:signedIn'); },
   });
   ipcMain.handle('ytm:home', (_e, next) => ytm.home(next));
   ipcMain.handle('ytm:play', (_e, endpoint) => ytm.play(endpoint));

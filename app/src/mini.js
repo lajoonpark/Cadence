@@ -20,6 +20,7 @@ import { createFlights } from './suitcase/flight.js';
 import { createDiscMachine } from './suitcase/machine.js';
 import { createSearch } from './search.js';
 import { getCover } from './racks/common.js';
+import { paintedCoverURL } from './coverpaint.js';
 import { maxFps } from './pacer.js';
 
 const params = new URLSearchParams(location.search);
@@ -65,23 +66,40 @@ const hud = new THREE.Group();
 camera.add(hud);
 const flights = createFlights({ scene: hud, suitcase, camera, view: camera, worldCase: true });
 const machine = createDiscMachine({ parent: hud, camera, view: camera, kit: suitcase.recordKit, onDisc: (d) => flights.receive(d) });
-let listenAgain = null;
+// The empty box shows the Listen again shelf (only here, not in the shop: Lajoon). It is fetched and its
+// covers painted while the window is still hidden, so the slips are there the moment search opens. An old
+// copy is never waited for: it shows at once while a fresh one comes in for next time (at most every 5 min).
+const LISTEN_AGAIN_MAX_AGE = 300000;
+let listenAgain = null;     // { title, items } of the last good answer
+let listenAgainAt = -Infinity;
+let listenAgainBusy = null; // the fetch under way; never rejects, resolves to listenAgain
+async function paintAhead(items) {   // one at a time: a lid opening meanwhile keeps its frames
+  for (const item of items) if (item.art) await paintedCoverURL(item.art);
+}
+function refreshListenAgain() {
+  if (listenAgainBusy || performance.now() - listenAgainAt < LISTEN_AGAIN_MAX_AGE) return listenAgainBusy;
+  listenAgainBusy = music.shelves().then(({ shelves }) => {
+    const sh = shelves.find((x) => /listen again/i.test(x.title)) ?? shelves[0];
+    if (!sh) return;
+    listenAgainAt = performance.now();
+    listenAgain = { title: sh.title, items: sh.items };
+    paintAhead(sh.items);
+  }).catch((e) => console.warn('[cadence] Listen again failed', e))   // tried again at the next summon or search
+    .then(() => { listenAgainBusy = null; return listenAgain; });
+  return listenAgainBusy;
+}
+refreshListenAgain();
+// the guest shelf is no use after signing in
+music.onSignedIn?.(() => Promise.resolve(listenAgainBusy).then(() => { listenAgainAt = -Infinity; refreshListenAgain(); }));
 const search = createSearch({
   music,
   onPlay: (item) => {
     startSong(music, suitcase, item);
     machine.run(getCover(item.art, 512).tex, { x: 0.58, y: 0.08, h: 0.22 });   // stands to the right of the case, clear of the card's edge
   },
-  // the empty box shows the Listen again shelf (only here, not in the shop: Lajoon); fetched at most every 5 min
-  suggest: async () => {
-    if (!listenAgain || performance.now() - listenAgain.at > 300000) {
-      listenAgain = { at: performance.now(), got: music.shelves().then(({ shelves }) => {
-        const sh = shelves.find((x) => /listen again/i.test(x.title)) ?? shelves[0];
-        return sh ? { title: sh.title, items: sh.items } : null;
-      }) };
-      listenAgain.got.catch(() => { listenAgain = null; });
-    }
-    return listenAgain.got;
+  suggest: () => {
+    const busy = refreshListenAgain();
+    return listenAgain ?? busy;
   },
 });
 caption.show(true, true);
@@ -118,6 +136,7 @@ function summon() {
     applyAppear();
     renderer.setAnimationLoop(loop);
     lastT = performance.now();
+    refreshListenAgain();
   }
   phase = 'open';
   suitcase.open();                              // from wherever it is: a summon while closing carries the lid back over the top

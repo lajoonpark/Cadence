@@ -100,7 +100,24 @@ uniform vec2 paperOffset;
 uniform float seed;
 varying vec2 vUv;
 ${NOISE}
+#ifdef OWN_SURFACE
+// Brush mode: paint runs along a surface, never across an outline onto what is behind it. The depth
+// buffer is linear on screen for a flat surface, so a neighbour on the same one is predicted exactly.
+uniform sampler2D tDepth;
+uniform float near;
+uniform float far;
+float metres(float z) { z = z * 2.0 - 1.0; return (2.0 * near * far) / (far + near - z * (far - near)); }
+float rawDepth(vec2 uv) { return texture2D(tDepth, uv).x; }
+float nearer(float a, float b) { return abs(a) < abs(b) ? a : b; }
+#endif
 void main() {
+#ifdef OWN_SURFACE
+  float z0 = rawDepth(vUv);
+  vec2 slope = vec2(
+    nearer(rawDepth(vUv + vec2(texel.x, 0.0)) - z0, z0 - rawDepth(vUv - vec2(texel.x, 0.0))),
+    nearer(rawDepth(vUv + vec2(0.0, texel.y)) - z0, z0 - rawDepth(vUv - vec2(0.0, texel.y))));
+  float tol = 0.02 + 0.006 * metres(z0);
+#endif
   vec2 pq = gl_FragCoord.xy * FRAG / 512.0 + paperOffset;
   float ang = fbm(pq * 1.1) * 12.566 + (fbm(pq * 3.0 + seed * 0.02) - 0.5) * 0.6;
   vec2 dir = vec2(cos(ang), sin(ang));
@@ -118,6 +135,10 @@ void main() {
       vec3 c = texture2D(tWash, vUv + o).rgb;
       // dark into light: a darker neighbour gets more say
       float w = g * clamp(1.0 + 2.5 * (l0 - lum(c)), 0.25, 2.5);
+#ifdef OWN_SURFACE
+      float expected = z0 + dot(slope, o / texel);
+      w *= 1.0 - smoothstep(tol, tol * 1.6, abs(metres(rawDepth(vUv + o)) - metres(expected)));
+#endif
       acc += c * w; wsum += w;
     }
   }
@@ -449,9 +470,10 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
     const bleedT = new THREE.WebGLRenderTarget(ws.x, ws.y, { type: THREE.HalfFloatType, depthBuffer: false });
     const prepP = pass(prepShader, {}, { tScene: { value: target.texture } });
     const strokes = createBrushStrokes(renderer, refT.texture, target.depthTexture);
-    const bleedP = pass(bleedShader, { BLEED: (L.bleed * scale).toFixed(2), BLEED_MIX: L.bleedMix.toFixed(2), FRAG: (1 / scale).toFixed(4) }, {
+    const bleedP = pass(bleedShader, { OWN_SURFACE: '', BLEED: (L.bleed * scale).toFixed(2), BLEED_MIX: L.bleedMix.toFixed(2), FRAG: (1 / scale).toFixed(4) }, {
       tWash: { value: paintT.texture }, texel: { value: new THREE.Vector2() },
       paperOffset: material.uniforms.paperOffset, seed: material.uniforms.seed,
+      tDepth: { value: target.depthTexture }, near: material.uniforms.near, far: material.uniforms.far,
     });
     const steps = [[refT, prepP.sc, 'prep'], [paintT, strokes.scene, 'strokes'], [bleedT, bleedP.sc, 'bleed']];
     const b = {

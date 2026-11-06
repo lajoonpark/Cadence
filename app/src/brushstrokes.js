@@ -1,8 +1,10 @@
 // Paints the world with real brush strokes, pinned to it: each stroke is a small painted decal fixed
 // to a spot on a wall, floor or table, so it moves exactly with that surface and sits perfectly still
 // when the camera does. Only its colour is live, read from the rendered scene at that spot, so lighting
-// and time of day still reach the paint. A stroke may run past the edge of its surface, which is what
-// makes outlines uneven, but breaks up where the picture stops being its colour.
+// and time of day still reach the paint. A stroke is painted only on its own surface: per pixel it
+// compares its depth with the scene's, so rack paint never lands on the wall behind and wall paint never
+// lands on the rack. Each stroke is also fitted to the shape under it when placed: it runs along a board
+// or post, is no wider than it, and slides so both of its ends land on it.
 //
 // Where strokes go is found by rendering the scene's positions from the places the camera visits and
 // reading them back, so hidden faces get none. Closer views add smaller strokes, and each stroke fades
@@ -19,6 +21,20 @@ float noise(vec2 p) {
   return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
 }
 float fbm(vec2 p) { return noise(p) * 0.55 + noise(p * 2.1 + 7.3) * 0.3 + noise(p * 4.3 + 1.7) * 0.15; }
+`;
+
+// metres from the camera at a screen position
+const SCENE_DEPTH = /* glsl */ `
+float sceneDepth(vec2 uv) {
+  float z = textureLod(tDepth, uv, 0.0).x * 2.0 - 1.0;
+  return (2.0 * clipRange.x * clipRange.y) / (clipRange.y + clipRange.x - z * (clipRange.y - clipRange.x));
+}
+// 1 where a point d metres away is on the surface drawn at that position, 0 where it is on something else
+uniform float slack;         // a long stroke lying across bricks or a curve needs more give than a small one
+float sameSurface(vec2 uv, float d) {
+  float tol = (0.02 + 0.006 * d) * slack;
+  return 1.0 - smoothstep(tol, tol * 1.6, abs(sceneDepth(uv) - d));
+}
 `;
 
 const quadVertex = /* glsl */ `
@@ -59,6 +75,7 @@ const strokeVertex = /* glsl */ `
 attribute vec4 aPos;         // world position, stroke length in metres
 attribute vec4 aTan;         // direction along the surface, random
 attribute vec4 aNor;         // surface normal, random
+attribute vec2 aShape;       // length and width after fitting to the shape it sits on (metres)
 uniform sampler2D tRef;
 uniform sampler2D tDepth;
 uniform mat4 viewProj;
@@ -66,7 +83,6 @@ uniform vec3 eye;
 uniform vec2 clipRange;      // camera near, far
 uniform float heightAt1m;    // metres of world filling the screen's height, 1 m from the camera
 uniform float lodShift;      // keeps stroke colours at the same scale at any window size
-uniform float widthRatio;
 uniform vec2 window;         // stroke length on screen (fraction of its height) where it is fully shown
 uniform vec2 lods;           // fine, coarse colour levels
 uniform vec2 gate;           // detail difference that starts / fully shows a stroke (0 0: always)
@@ -75,16 +91,14 @@ varying vec2 vAtlas;
 varying vec3 vPigment;
 varying vec3 vWants;         // the colour this mark is painting: it stops where the picture stops being that
 varying float vFade;
+varying float vDepth;
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 vec3 saturated(vec3 c) { return clamp(mix(vec3(lum(c)), c, 1.3), 0.0, 1.0); }
-float sceneDepth(vec2 uv) {
-  float z = textureLod(tDepth, uv, 0.0).x * 2.0 - 1.0;
-  return (2.0 * clipRange.x * clipRange.y) / (clipRange.y + clipRange.x - z * (clipRange.y - clipRange.x));
-}
+${SCENE_DEPTH}
 void main() {
   // anything not on show collapses off screen before the costly part
   gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-  vAtlas = vec2(0.0); vPigment = vec3(1.0); vWants = vec3(1.0); vFade = 0.0;
+  vAtlas = vec2(0.0); vPigment = vec3(1.0); vWants = vec3(1.0); vFade = 0.0; vDepth = 0.0;
   vec4 clipA = viewProj * vec4(aPos.xyz, 1.0);
   if (clipA.w < 0.15) return;
   vec2 a = clipA.xy / clipA.w * 0.5 + 0.5;
@@ -112,13 +126,14 @@ void main() {
   vFade = fade;
 
   // a hand swings in an arc, so no mark is straight
-  float len = aPos.w * (0.75 + 0.5 * aNor.w);
-  float wid = aPos.w * widthRatio * (0.75 + 0.5 * fract(aNor.w * 7.13));
+  float len = aShape.x * (0.8 + 0.2 * aNor.w);
+  float wid = aShape.y * (0.8 + 0.2 * fract(aNor.w * 7.13));
   float bend = (fract(aNor.w * 11.3) - 0.5) * 0.7;
   vec2 lp = vec2(position.x, position.y + bend * (position.x * position.x - 0.15));
   vec3 side = cross(aNor.xyz, aTan.xyz);
   vec3 world = aPos.xyz + aTan.xyz * lp.x * len + side * lp.y * wid + aNor.xyz * 0.01;
   gl_Position = viewProj * vec4(world, 1.0);
+  vDepth = gl_Position.w;
   vWants = fine;
 
   float cell = floor(aTan.w * 97.0);
@@ -140,6 +155,8 @@ void main() {
 const strokeFragment = /* glsl */ `
 uniform sampler2D tAtlas;
 uniform sampler2D tRef;
+uniform sampler2D tDepth;
+uniform vec2 clipRange;
 uniform float opacity;
 uniform float rimPower;
 uniform float lodShift;
@@ -148,6 +165,8 @@ varying vec2 vAtlas;
 varying vec3 vPigment;
 varying vec3 vWants;
 varying float vFade;
+varying float vDepth;
+${SCENE_DEPTH}
 void main() {
   vec4 s = texture2D(tAtlas, vAtlas);
   // The mark stops at the edge of the shape it is painting, raggedly: the bristle pattern shifts
@@ -156,7 +175,10 @@ void main() {
   vec2 off = (s.gb - vec2(0.8, 0.2)) * 0.022;
   vec3 here = textureLod(tRef, screen + off, clip.x + lodShift).rgb;
   float stay = 1.0 - smoothstep(clip.y, clip.z, length(here - vWants));
-  float cover = s.r * stay * vFade;
+  // Its own surface only. The second look, shifted by the bristles, stops the mark a hair short of the
+  // edge, unevenly, the way a careful hand cuts in: it can fall short but never crosses.
+  float own = sameSurface(screen, vDepth) * sameSurface(screen + off * 0.2, vDepth);
+  float cover = s.r * stay * vFade * own;
   vec3 pig = pow(max(vPigment, vec3(0.001)), vec3(1.0 + s.b * rimPower));
 #ifdef TOUCH
   gl_FragColor = vec4(pig, cover * opacity);
@@ -174,15 +196,19 @@ uniform float lodShift;
 uniform float power;
 uniform vec2 pan;
 uniform float aspect;
+uniform sampler2D tDepth;
+uniform vec2 clipRange;
 varying vec2 vUv;
 ${NOISE}
+${SCENE_DEPTH}
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main() {
   vec2 q = (vUv + pan) * vec2(aspect, 1.0);
   // every shape's edge wanders here, in the first wash, before a brush touches it
   vec2 wander = (vec2(fbm(q * 5.0 + 11.0), fbm(q * 5.0 + 37.0)) - 0.5) * 0.028
               + (vec2(fbm(q * 19.0 + 3.0), fbm(q * 19.0 + 23.0)) - 0.5) * 0.009;
-  vec3 c = textureLod(tRef, vUv + wander, 2.2 + lodShift).rgb;
+  // ...but only within its own surface: past an outline this wash keeps its own colour
+  vec3 c = mix(textureLod(tRef, vUv, 1.0 + lodShift).rgb, textureLod(tRef, vUv + wander, 2.2 + lodShift).rgb, sameSurface(vUv + wander, sceneDepth(vUv)));
   c = clamp(mix(vec3(lum(c)), c, 1.3), 0.0, 1.0);
   // left bare in places: the paper shows through as light catches
   float thin = smoothstep(0.5, 0.74, fbm(q * 2.6 + 3.0));
@@ -194,11 +220,11 @@ void main() {
 // spacing: gap between strokes as a fraction of their length.
 const LAYERS = [
   // broad glazes
-  { segments: 6, cap: 60000, reach: 0.36, spacing: 0.68, widthRatio: 0.4, window: [0.2, 0.6], lods: [3.0, 4.2], gate: [0, 0], power: 0.25, opacity: 0.95, rim: 0.5, clip: [1.6, 0.15, 0.3], mode: 'GLAZE' },
+  { segments: 6, cap: 60000, reach: 0.36, spacing: 0.68, widthRatio: 0.4, window: [0.2, 0.6], lods: [3.0, 4.2], gate: [0, 0], power: 0.25, opacity: 0.95, rim: 0.5, clip: [1.6, 0.15, 0.3], slack: 2.5, mode: 'GLAZE' },
   // medium strokes, where the picture has detail the glazes could not hold
-  { segments: 3, cap: 90000, reach: 0.14, spacing: 0.55, widthRatio: 0.33, window: [0.08, 0.24], lods: [1.6, 3.4], gate: [0.025, 0.09], power: 1, opacity: 0.85, rim: 0.4, clip: [1.2, 0.08, 0.2], mode: 'CORRECT' },
+  { segments: 3, cap: 90000, reach: 0.14, spacing: 0.55, widthRatio: 0.33, window: [0.08, 0.24], lods: [1.6, 3.4], gate: [0.025, 0.09], power: 1, opacity: 0.85, rim: 0.4, clip: [1.2, 0.08, 0.2], slack: 1.5, mode: 'CORRECT' },
   // fine touches of opaque colour, the only marks that can put light back on a dark wash
-  { segments: 1, cap: 120000, reach: 0.05, spacing: 0.5, widthRatio: 0.29, window: [0.03, 0.1], lods: [0.8, 2.2], gate: [0.07, 0.18], power: 1, opacity: 0.72, rim: 0.2, clip: [0.7, 0.1, 0.22], mode: 'TOUCH' },
+  { segments: 1, cap: 120000, reach: 0.05, spacing: 0.5, widthRatio: 0.29, window: [0.03, 0.1], lods: [0.8, 2.2], gate: [0.07, 0.18], power: 1, opacity: 0.72, rim: 0.2, clip: [0.7, 0.1, 0.22], slack: 1, mode: 'TOUCH' },
 ];
 const BASE_LENGTH = 0.1; // metres; stroke lengths are this times a power of two
 const MAX_OCTAVE = 6;
@@ -250,13 +276,13 @@ function layerMesh(layer, shared, atlas) {
   geo.index = plane.index;
   geo.setAttribute('position', plane.getAttribute('position'));
   geo.setAttribute('uv', plane.getAttribute('uv'));
-  const attr = (name) => {
-    const a = new THREE.InstancedBufferAttribute(new Float32Array(layer.cap * 4), 4);
+  const attr = (name, size = 4) => {
+    const a = new THREE.InstancedBufferAttribute(new Float32Array(layer.cap * size), size);
     a.setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute(name, a);
     return a;
   };
-  const buffers = { aPos: attr('aPos'), aTan: attr('aTan'), aNor: attr('aNor') };
+  const buffers = { aPos: attr('aPos'), aTan: attr('aTan'), aNor: attr('aNor'), aShape: attr('aShape', 2) };
   geo.instanceCount = 0;
   const blend = layer.mode === 'TOUCH'
     ? { blending: THREE.NormalBlending }
@@ -268,13 +294,13 @@ function layerMesh(layer, shared, atlas) {
     uniforms: {
       ...shared,
       tAtlas: { value: atlas.texture },
-      widthRatio: { value: layer.widthRatio },
       window: { value: new THREE.Vector2(...layer.window) },
       lods: { value: new THREE.Vector2(...layer.lods) },
       gate: { value: new THREE.Vector2(...layer.gate) },
       power: { value: layer.power },
       opacity: { value: layer.opacity },
       rimPower: { value: layer.rim },
+      slack: { value: layer.slack },
       clip: { value: new THREE.Vector3(...layer.clip) },
     },
     transparent: true,
@@ -288,15 +314,20 @@ function layerMesh(layer, shared, atlas) {
   return { mesh, geo, mat, plane, buffers, layer, count: 0, taken: new Set() };
 }
 
-// A direction along the surface: level across walls, with a slow drift over the world and some hand
-// wobble, so strokes on one wall roughly agree. Fixed once chosen.
+// A direction along the surface for strokes on open walls and floors: nearly level, with a slow drift over
+// the world and a little hand wobble, so one wall reads as worked by one hand. Fixed once chosen.
 const UP = new THREE.Vector3(0, 1, 0), X = new THREE.Vector3(1, 0, 0);
 const tangent = new THREE.Vector3();
 function chooseTangent(p, n, r) {
   tangent.crossVectors(Math.abs(n.y) > 0.8 ? X : UP, n).normalize();
   const drift = Math.sin(p.x * 0.7 + p.z * 0.4) * 0.5 + Math.sin(p.y * 1.1 - p.z * 0.6) * 0.4;
-  return tangent.applyAxisAngle(n, -0.3 + drift + (r - 0.5) * 0.6);
+  return tangent.applyAxisAngle(n, -0.2 + drift * 0.3 + (r - 0.5) * 0.3);
 }
+
+// Looks around a point in the position picture for the flat piece of surface it belongs to.
+const RAYS = 16, RAY_STEP = 2, RAY_STEPS = 30;
+const RAY_DIRS = Array.from({ length: RAYS }, (_, k) => [Math.cos((k / RAYS) * Math.PI * 2), Math.sin((k / RAYS) * Math.PI * 2)]);
+const flatTol = (d) => 0.015 + 0.006 * d;
 
 const FACES = (n) => (Math.abs(n.x) > Math.abs(n.y) && Math.abs(n.x) > Math.abs(n.z) ? (n.x > 0 ? 0 : 1) : Math.abs(n.y) > Math.abs(n.z) ? (n.y > 0 ? 2 : 3) : (n.z > 0 ? 4 : 5));
 
@@ -317,7 +348,7 @@ export function createBrushStrokes(renderer, refTexture, depthTexture) {
   const under = new THREE.ShaderMaterial({
     vertexShader: quadVertex,
     fragmentShader: underFragment,
-    uniforms: { tRef: shared.tRef, lodShift: shared.lodShift, pan: shared.pan, aspect: shared.aspect, power: { value: 0.7 } },
+    uniforms: { slack: { value: 1 }, tRef: shared.tRef, tDepth: shared.tDepth, clipRange: shared.clipRange, lodShift: shared.lodShift, pan: shared.pan, aspect: shared.aspect, power: { value: 0.7 } },
     depthTest: false, depthWrite: false, blending: THREE.NoBlending,
   });
   const underQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), under);
@@ -333,7 +364,8 @@ export function createBrushStrokes(renderer, refTexture, depthTexture) {
   });
 
   const r = rng(7);
-  const p = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3(), n = new THREE.Vector3(), toEye = new THREE.Vector3();
+  const p = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e = new THREE.Vector3(), n = new THREE.Vector3(), toEye = new THREE.Vector3(), side = new THREE.Vector3(), centre = new THREE.Vector3(), long = new THREE.Vector3(), mid = new THREE.Vector3();
+  const ends = Array.from({ length: RAYS }, () => new THREE.Vector3());
   const place = (cam, data) => {
     const at = (x, y, out) => { const i = (y * BAKE_W + x) * 4; if (!data[i + 3]) return null; return out.set(data[i], data[i + 1], data[i + 2]); };
     const eye = cam.getWorldPosition(new THREE.Vector3());
@@ -343,12 +375,21 @@ export function createBrushStrokes(renderer, refTexture, depthTexture) {
         if (!at(px, py, p) || !at(px + BAKE_STRIDE, py, a) || !at(px, py + BAKE_STRIDE, b)) continue;
         const d = toEye.subVectors(eye, p).length();
         if (d > FARTHEST) continue;
-        const reachOk = 0.12 * d;
-        if (a.distanceTo(p) > reachOk || b.distanceTo(p) > reachOk) continue; // across an edge
-        n.crossVectors(a.sub(p), b.sub(p));
-        if (n.lengthSq() < 1e-12) continue;
+        // the normal, from as wide a patch as is still flat, so a long stroke lies true on bricks
+        const tol = flatTol(d);
+        let normalOk = false;
+        for (const k of [8, 3, 1]) {
+          if (!at(px + k, py, a) || !at(px - k, py, c) || !at(px, py + k, b) || !at(px, py - k, e)) continue;
+          if (mid.addVectors(a, c).multiplyScalar(0.5).distanceTo(p) > tol || mid.addVectors(b, e).multiplyScalar(0.5).distanceTo(p) > tol) continue;
+          n.crossVectors(a.sub(c), b.sub(e));
+          if (n.lengthSq() < 1e-12) continue;
+          normalOk = true;
+          break;
+        }
+        if (!normalOk) continue; // on an edge
         n.normalize();
         if (n.dot(toEye) < 0) n.negate();
+        let measured = false, longest = 0, narrow = false;
         for (const part of layers) {
           const { layer, buffers, taken } = part;
           if (part.count >= layer.cap) continue;
@@ -358,9 +399,45 @@ export function createBrushStrokes(renderer, refTexture, depthTexture) {
           const key = (Math.floor(p.x / cell) + 8192) * 2 ** 34 + (Math.floor(p.y / cell) + 8192) * 2 ** 20 + (Math.floor(p.z / cell) + 8192) * 2 ** 6 + octave * 6 + FACES(n);
           if (taken.has(key)) continue;
           taken.add(key);
-          const t = chooseTangent(p, n, r());
+          if (!measured) {
+            measured = true;
+            for (let k = 0; k < RAYS; k++) {
+              const [dx, dy] = RAY_DIRS[k], end = ends[k].set(0, 0, 0);
+              for (let step = 1; step <= RAY_STEPS; step++) {
+                if (!at(Math.round(px + dx * step * RAY_STEP), Math.round(py + dy * step * RAY_STEP), a)) break;
+                a.sub(p);
+                if (Math.abs(a.dot(n)) > tol) break;
+                end.copy(a);
+              }
+            }
+            for (let k = 0; k < RAYS / 2; k++) {
+              const chord = a.subVectors(ends[k], ends[k + RAYS / 2]).length();
+              if (chord > longest) { longest = chord; long.copy(a); }
+            }
+            long.normalize();
+            long.addScaledVector(n, -long.dot(n)).normalize();
+            let lo = 0, hi = 0;
+            side.crossVectors(n, long);
+            for (const q of ends) { const v = q.dot(side); lo = Math.min(lo, v); hi = Math.max(hi, v); }
+            narrow = longest > (hi - lo) * 1.6; // a board, a post, a shelf edge
+          }
+          // a stroke follows a long thin shape when it is too big to lie across it
+          const follow = narrow && longest > 1e-3;
+          const t = follow ? tangent.copy(long).applyAxisAngle(n, (r() - 0.5) * 0.12) : chooseTangent(p, n, r());
+          side.crossVectors(n, t);
+          let al = 0, ah = 0, sl = 0, sh = 0;
+          for (const q of ends) {
+            const u = q.dot(t), v = q.dot(side);
+            al = Math.min(al, u); ah = Math.max(ah, u); sl = Math.min(sl, v); sh = Math.max(sh, v);
+          }
+          // fit it, then slide it so both ends land on the shape
+          const wid = Math.max(0.006, Math.min(len * layer.widthRatio, (sh - sl) * 1.1));
+          const fitted = Math.max(wid * 1.6, Math.min(len, (ah - al) * 1.1));
+          const slide = (lo, hi, size) => (size >= hi - lo ? (lo + hi) / 2 : Math.max(lo + size / 2, Math.min(hi - size / 2, 0)));
+          centre.copy(p).addScaledVector(t, slide(al, ah, fitted)).addScaledVector(side, slide(sl, sh, wid));
           const i = part.count++;
-          buffers.aPos.setXYZW(i, p.x, p.y, p.z, len);
+          buffers.aPos.setXYZW(i, centre.x, centre.y, centre.z, len);
+          buffers.aShape.setXY(i, fitted, wid);
           buffers.aTan.setXYZW(i, t.x, t.y, t.z, r());
           buffers.aNor.setXYZW(i, n.x, n.y, n.z, r());
         }
@@ -410,7 +487,7 @@ export function createBrushStrokes(renderer, refTexture, depthTexture) {
     for (const part of layers) {
       part.geo.instanceCount = part.count;
       part.mesh.visible = part.count > 0;
-      for (const buf of Object.values(part.buffers)) { buf.clearUpdateRanges(); buf.addUpdateRange(0, part.count * 4); buf.needsUpdate = true; }
+      for (const buf of Object.values(part.buffers)) { buf.clearUpdateRanges(); buf.addUpdateRange(0, part.count * buf.itemSize); buf.needsUpdate = true; }
     }
   }
 

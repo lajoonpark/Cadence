@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('cadence', {
   search: (q) => ipcRenderer.invoke('ytm:search', q),
   playlistArt: (play) => ipcRenderer.invoke('ytm:playlistArt', play),
   play: (endpoint) => ipcRenderer.invoke('ytm:play', endpoint),
+  prepare: (endpoint) => ipcRenderer.invoke('ytm:prepare', endpoint),
+  startPrepared: (endpoint) => ipcRenderer.invoke('ytm:startPrepared', endpoint),
   command: (name, arg) => ipcRenderer.invoke('ytm:command', name, arg),
   signIn: () => ipcRenderer.invoke('ytm:signIn'),
   onState: (cb) => ipcRenderer.on('ytm:state', (_e, s) => cb(s)),

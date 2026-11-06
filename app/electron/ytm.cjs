@@ -146,6 +146,18 @@ function createYtm({ onState, onSignedIn }) {
     await win.loadURL(`${HOME}watch?${q}`);
   }
 
+  // Loads a song ahead of the tonearm, silent and stopped at 0:00 (see ytm-page.js). Resolves when it is
+  // ready to start; false if it could not be held, which startPrepared copes with.
+  async function prepare(endpoint) {
+    await ready();
+    return js(`window.__cadence.prepare(${JSON.stringify(endpoint)})`).catch(() => false);
+  }
+  async function startPrepared(endpoint) {
+    await ready();
+    const held = await js('window.__cadence.release()').catch(() => false);
+    if (!held) await play(endpoint);
+  }
+
   // On macOS the volume knob is the system volume; the player itself stays at full volume.
   // It is read (one osascript run) only while a Cadence window is on screen, to catch the volume keys.
   const sysVol = createSystemVolume();
@@ -214,7 +226,7 @@ function createYtm({ onState, onSignedIn }) {
   }
 
   // Request handlers main.cjs registers as ipc channels ytm:<name> (renderer: window.cadence.<name>).
-  const ipc = { search, playlistArt };
+  const ipc = { search, playlistArt, prepare, startPrepared };
   return { home, play, command, signIn, ipc, search, playlistArt, setActive, window: win };
 }
 

@@ -73,7 +73,7 @@
     next() { click(['ytmusic-player-bar .next-button', 'ytmusic-player-bar tp-yt-paper-icon-button.next-button']) || player()?.nextVideo(); },
     previous() { click(['ytmusic-player-bar .previous-button']) || player()?.previousVideo(); },
     seek(seconds) { player()?.seekTo(Math.max(0, seconds), true); },
-    volume(v) { const p = player(); if (!p) return; p.unMute?.(); p.setVolume(Math.round(Math.min(100, Math.max(0, v)))); },
+    volume(v) { const p = player(); if (!p) return; if (!hold) p.unMute?.(); p.setVolume(Math.round(Math.min(100, Math.max(0, v)))); },
     like() {
       const r = bar()?.querySelector('ytmusic-like-button-renderer');
       if (!r) return;
@@ -81,6 +81,82 @@
       btn?.click();
     },
   };
+
+  // A song loading ahead of the tonearm: prepare() starts it through the router, silently, and as soon
+  // as it really plays it is stopped at 0:00. release() then plays it. YouTube Music has no "load but
+  // do not play", hence the catch. Until release, state() goes on describing the old song, so the
+  // suitcase sees no change before the new record has landed.
+  // hold = { prev: id before the load, frozen: state to report, ready, done: resolves prepare(), timer }
+  let hold = null;
+  const HOLD_MAX_MS = 30000;                                  // nobody released it (window hidden, ...): play
+  const IGNORED_IN_HOLD = new Set(['toggle', 'play', 'next', 'previous', 'seek', 'like']);   // they would act on a song the suitcase does not show yet
+  const MUTE_FLAG = 'cadenceHoldMuted';                       // survives a crash mid-hold; YouTube remembers mute
+  const isAd = () => !!document.querySelector('#movie_player.ad-showing, .ytp-ad-player-overlay');
+
+  function checkHold() {
+    const p = player();
+    if (!hold || !p) return;
+    if (isAd()) {                                             // an ad cannot be rewound; it waits where it is
+      const v = p.querySelector('video');                     // the player's own state says little during an ad
+      if (v && !v.paused) { p.pauseVideo?.(); if (!v.paused) v.pause(); }
+      if (v && v.readyState >= 2 && !hold.ready) { hold.ready = true; hold.done(true); }
+      return;
+    }
+    const id = p.getVideoData?.()?.video_id;
+    if (!hold.ready && !(id && id !== hold.prev)) return;     // still the old song
+    const st = p.getPlayerState?.();
+    if (st === 1 || (!hold.ready && st === 2)) {
+      p.seekTo?.(0, true);
+      p.pauseVideo?.();
+      if (!hold.ready) { hold.ready = true; hold.done(true); }
+    }
+  }
+  // Media events do not bubble but can be captured, and unlike timers they are not throttled in this hidden window.
+  for (const ev of ['playing', 'timeupdate', 'pause']) document.addEventListener(ev, checkHold, true);
+
+  function endHold() {
+    clearTimeout(hold.timer);
+    clearInterval(hold.poll);
+    hold.done(false);                                         // no effect if it was already ready
+    hold = null;
+    try { localStorage.removeItem(MUTE_FLAG); } catch { /* storage blocked: harmless */ }
+  }
+
+  // -> true once the song is loaded and stopped at 0:00, false if that did not happen (nothing to release).
+  function prepare(play) {
+    const p = player();
+    const frozen = hold?.frozen ?? { ...state(), playerState: 2 };   // a second pick while one loads keeps the first picture
+    if (hold) endHold();
+    const prev = p?.getVideoData?.()?.video_id ?? null;
+    return new Promise((done) => {
+      hold = { prev, frozen, ready: false, done };
+      hold.timer = setTimeout(release, HOLD_MAX_MS);
+      hold.poll = setInterval(checkHold, 200);                // backup for the events above
+      try { localStorage.setItem(MUTE_FLAG, '1'); } catch { /* see endHold */ }
+      p?.mute?.();
+      if (play.videoId && play.videoId === prev && !isAd()) { // the same song again: it is already loaded
+        p.seekTo?.(0, true);
+        p.pauseVideo?.();
+        hold.ready = true;
+        done(true);
+      } else if (!navigate(play)) {
+        endHold();
+        p?.unMute?.();
+      }
+    });
+  }
+
+  // Lets the held song play. -> false if nothing was held (the caller has to start the song itself).
+  function release() {
+    if (!hold) return false;
+    endHold();
+    const p = player();
+    p?.unMute?.();
+    p?.playVideo?.();
+    const v = p?.querySelector('video');
+    if (v?.paused && isAd()) v.play().catch(() => {});        // held by hand above
+    return true;
+  }
 
   // Nobody sees this page's video, so ask for the smallest stream once per song (less decoding;
   // the audio quality does not depend on it).
@@ -96,8 +172,14 @@
     const meta = navigator.mediaSession?.metadata;
     const data = p?.getVideoData?.() ?? {};
     if (p) lowVideo(p, data.video_id);
+    if (p && !hold) {
+      let stuck = false;
+      try { stuck = !!localStorage.getItem(MUTE_FLAG); if (stuck) localStorage.removeItem(MUTE_FLAG); } catch { /* see endHold */ }
+      if (stuck) p.unMute?.();                                // the app died during a hold
+    }
+    if (hold) return { ...hold.frozen, volume: p?.getVolume?.() ?? hold.frozen.volume };
     // During an ad, media session metadata describes the ad, so leave the song fields empty.
-    const ad = !!document.querySelector('#movie_player.ad-showing, .ytp-ad-player-overlay');
+    const ad = isAd();
     const song = ad ? null : meta;
     const art = song?.artwork?.length ? song.artwork[song.artwork.length - 1].src : null;
     return {
@@ -119,5 +201,8 @@
     };
   }
 
-  window.__cadence = { api, navigate, state, command: (name, arg) => commands[name]?.(arg) };
+  window.__cadence = {
+    api, navigate, state, prepare, release,
+    command: (name, arg) => { if (!(hold && IGNORED_IN_HOLD.has(name))) return commands[name]?.(arg); },
+  };
 })();

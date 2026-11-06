@@ -26,6 +26,9 @@ function realMusic(c) {
     // Songs matching a query -> [{ kind: 'song', title, subtitle (artist), album, duration (s), art, play }]
     search: (q) => c.search(q),
     play: (item) => c.play(item.play),
+    // Load a song without hearing it (resolves when it is ready), then start it from 0:00.
+    prepare: (item) => c.prepare(item.play),
+    startPrepared: (item) => c.startPrepared(item.play),
     command: (name, arg) => c.command(name, arg),
     signIn: () => c.signIn(),
     onState: (cb) => c.onState(cb),
@@ -157,6 +160,9 @@ function fakeMusic() {
       queue = shelf ? shelf.items : all;
       load(queue.indexOf(item));
     },
+    // ?loadms=N: pretend a song takes that long to load
+    prepare: () => new Promise((r) => setTimeout(r, Number(new URLSearchParams(location.search).get('loadms')) || 0)),
+    startPrepared(item) { return this.play(item); },
     command: async (name, arg) => commands[name]?.(arg),
     signIn: async () => {},
     onState: (cb) => listeners.push(cb),

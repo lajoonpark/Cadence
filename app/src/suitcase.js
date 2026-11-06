@@ -34,11 +34,12 @@ const SPIN = 3.49;          // 33 1/3 rpm in radians per second
 const MAX_PITCH = 0.12, MAX_ROLL = 0.1;
 
 // A picked song with a record on its way to the platter. Settings > Start of a song: "when the arm lands"
-// (default) stops what plays now and starts the song once the needle is down (sc.cue); "at once" plays now.
+// (default) stops what plays now, loads the new song straight away, and starts it once the needle is down
+// (sc.cue); "at once" plays now.
 export function startSong(music, sc, item) {
   if (settings.get('playOnArm') === false) return music.play(item);
   music.command('pause');
-  sc.cue(() => music.play(item));
+  sc.cue(() => music.startPrepared(item), music.prepare(item));
 }
 
 // Square cover from a URL, centre-cropped onto a 512 px canvas; shows paper until it arrives.
@@ -114,10 +115,12 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
   // ---- record on the platter ----
   let seatHas = false, held = false, dropT = 1, dropH = 1.1;
   // A cued song (Settings > Start of a song, "when the arm lands"): it starts only once the record that
-  // is on its way has landed, the arm has swung onto the lead-in groove and dropped onto the vinyl.
-  // cue = { start: fn, at: s } until then; afterwards startHold keeps the arm at the lead-in until the new
+  // is on its way has landed, the arm has swung onto the lead-in groove and dropped onto the vinyl. If the
+  // song is still loading then, the arm hovers over the groove and drops when it is ready (or at HOVER_LIMIT).
+  // cue = { start: fn, at: s, ready, landed, hoverFrom } until then; afterwards startHold keeps the arm at the lead-in until the new
   // track reports in (its state still says the old one for a moment).
   let cue = null, startHold = 0, startFrom = null;
+  const HOVER_LIMIT = 8;                      // s: the most the arm waits for a slow song before dropping anyway
   const CUE_GIVE_UP = 7;                      // s: start anyway if the arm never gets there (hidden window, ...)   // dropH: how high a placed or swapped record starts above the platter
   let songProgress = 0;                       // progress of the song itself: an ad must not move the tonearm
   let labelTex = null;
@@ -275,16 +278,21 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
 
     // tonearm: creeps inward through the song, parks clear of the record when idle, lifts while it travels
     const cueing = !!cue?.landed && seatHas && !held && dropT >= 1;
+    if (cueing) {
+      cue.hoverFrom ??= now();
+      if (now() - cue.hoverFrom > HOVER_LIMIT) cue.ready = true;
+    }
+    const hovering = cueing && !cue.ready;
     const leadIn = cueing || (startHold > now() && videoId === startFrom);
     const onRecord = (hasTrack || leadIn) && seatHas && !held;
     const armTarget = onRecord ? armAngleForProgress(leadIn ? 0 : progressNow()) : parkedArmAngle();
     armAngle += (armTarget - armAngle) * smooth(6, dt);
     armPivot.rotation.y = armAngle;
     const travelling = Math.abs(armTarget - armAngle) > 0.04;
-    armLiftAmt += ((!onRecord || travelling ? 1 : 0) - armLiftAmt) * smooth(8, dt);
+    armLiftAmt += ((!onRecord || travelling || hovering ? 1 : 0) - armLiftAmt) * smooth(8, dt);
     armLift.rotation.z = -0.1 * armLiftAmt;
     // the needle is down on the lead-in: the record spins up and the song starts
-    if (cue && ((cueing && !travelling && armLiftAmt < 0.12) || now() - cue.at > CUE_GIVE_UP)) {
+    if (cue && (cueing ? cue.ready && !travelling && armLiftAmt < 0.12 : now() - cue.at > CUE_GIVE_UP)) {
       const start = cue.start;
       cue = null;
       startHold = now() + 4; startFrom = videoId;
@@ -478,8 +486,14 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
     root, parts, recordKit, hinge,
     setState, update, open, close, hover, pointerDown, pointerDrag, pointerUp, wheel, nudgeVolume, lean, cursor,
     placeRecord, liftRecord, fitPoints,
-    // start(): begin the song once the next record has landed and the arm is down on it (see cue above)
-    cue(start) { cue = { start, at: now() }; playing = false; playingHold = now() + 1.5; },
+    // start(): begin the song once the next record has landed and the arm is down on it (see cue above).
+    // loading: promise that settles when the song is ready to start, however that turned out.
+    cue(start, loading) {
+      const c = cue = { start, at: now(), ready: false };
+      const settled = () => { c.ready = true; };
+      loading.then(settled, settled);
+      playing = false; playingHold = now() + 1.5;
+    },
     // is the pointer on the case itself, where it is right now (no hover feedback)
     touches(ndc, camera) { return !!ndc && pick(ndc, camera).over; },
     set enabled(v) { enabled = v; if (!v) { cancelDrag(); setHover(null); } },
@@ -500,7 +514,7 @@ export function createSuitcase({ music = null, lidStop = DEFAULT_STOP, ground = 
     get currentCover() { return labelTex; },
     thump(amount) { thump = Math.max(thump, amount); },
     // for tests and the lab: what the platter is doing
-    get debug() { return { seatHas, held, dropT, seatY: seat.position.y, hasTrack, playing, adPlaying, claim: labels.pending, spin: spinSpeed, labelSet: !!labelTex, videoId }; },
+    get debug() { return { seatHas, held, dropT, seatY: seat.position.y, hasTrack, playing, adPlaying, claim: labels.pending, spin: spinSpeed, labelSet: !!labelTex, videoId, cue: cue && { landed: !!cue.landed, ready: cue.ready }, armLift: armLiftAmt }; },
     // the seat's world pose, for the flying record to land on
     seatMatrix() { root.updateWorldMatrix(true, true); return seat.matrixWorld; },
     ready: () => Promise.all([...covers.values()].map((t) => t.userData.loaded)),

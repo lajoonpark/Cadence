@@ -11,7 +11,8 @@
 const KEY = 'cadence.settings';
 
 export const DEFAULTS = {
-  paint: 3, // watercolour strength, 0..3 (see LEVELS in watercolour.js)
+  paint: 4, // how it is painted, 0..3 watercolour strength, 4 brush strokes (LEVELS in watercolour.js)
+  paintV: 2, // bumped when `paint` gains a new default look, so a saved choice of the old default does not hide it
   covers: 3, // how strongly album covers are painted, 0..3 (COVER_LEVELS in coverpaint.js)
   playOnArm: true, // the song starts when the tonearm lands and the record spins up (false: at once)
   maxFps: 60, // frame-rate cap, 60 or 30 (pacer.js); 30 runs cooler on a laptop
@@ -21,7 +22,9 @@ export const DEFAULTS = {
 function load() {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) || '{}');
-    return raw && typeof raw === 'object' ? raw : {};
+    if (!raw || typeof raw !== 'object') return {};
+    if (raw.paintV !== DEFAULTS.paintV) delete raw.paint;
+    return raw;
   } catch {
     return {};
   }

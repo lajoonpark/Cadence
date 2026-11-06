@@ -13,7 +13,7 @@ import { settings } from './settings.js';
 import { rng } from './rand.js';
 
 // Settings > Painting: watercolour strength (LEVELS in watercolour.js), lightest first
-const PAINT = ['Faint', 'Light', 'Medium', 'Heavy'];
+const PAINT = ['Faint', 'Light', 'Medium', 'Heavy', 'Brush strokes'];
 
 const CSS = `
 .st-btn { position: fixed; top: 3.4vh; right: 2.6vw; z-index: 6; border: 0; padding: 0; background: none; cursor: pointer;

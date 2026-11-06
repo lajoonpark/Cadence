@@ -153,7 +153,7 @@ void main() {
   vec2 id = vec2(mod(cell, ${ATLAS_COLS}.0), mod(floor(cell / ${ATLAS_COLS}.0), ${ATLAS_ROWS}.0));
   vAtlas = (id + uv) / vec2(${ATLAS_COLS}.0, ${ATLAS_ROWS}.0);
 #ifdef CORRECT
-  // a correction on top of the glazes: only what this spot needs beyond the coarser colour
+  // a correction on top of the coat: only what this spot needs beyond the coarser colour
   vPigment = clamp(fine / max(coarse, vec3(0.04)), 0.0, 1.0);
 #elif defined(GROUND)
   // opaque, so each stroke shows; no two come off the brush quite the same tone
@@ -244,7 +244,7 @@ void main() {
 const LAYERS = [
   // the coat: rows close enough that the strokes overlap and no wall is left bare
   { segments: 3, cap: 150000, reach: 0.3, rowGap: 0.17, colGap: 0.8, widthRatio: 0.3, window: [0.16, 0.8], lods: [3.0, 4.2], gate: [0, 0], calm: [0.1, 0.22], power: 0.82, opacity: 0.94, rim: 0.2, clip: [1.6, 0.15, 0.3], slack: 1.4, mode: 'GROUND' },
-  // medium strokes, where the picture has detail the glazes could not hold
+  // medium strokes, where the picture has detail the coat could not hold
   { segments: 3, cap: 90000, reach: 0.14, rowGap: 0.55, colGap: 0.55, widthRatio: 0.33, window: [0.08, 0.24], lods: [1.6, 3.4], gate: [0.025, 0.09], opacity: 0.85, rim: 0.4, clip: [1.2, 0.08, 0.2], slack: 1.5, mode: 'CORRECT' },
   // fine touches of opaque colour, the only marks that can put light back on a dark wash
   { segments: 1, cap: 120000, reach: 0.05, rowGap: 0.5, colGap: 0.5, widthRatio: 0.29, window: [0.03, 0.1], lods: [0.8, 2.2], gate: [0.07, 0.18], opacity: 0.72, rim: 0.2, clip: [0.7, 0.1, 0.22], slack: 1, mode: 'TOUCH' },

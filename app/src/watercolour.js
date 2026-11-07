@@ -24,7 +24,10 @@ const LEVELS = [
   // each other along the same bleed. radius/lift also set how the suitcase overlay is washed, as above.
   { strokes: true, radius: 6, bleed: 10, bleedMix: 0.4, bloom: 1.0, edge: 0.55, lift: 0.05, grain: 0.4 },
 ];
-const LAST_WASH_LEVEL = 3; // the small card window holds only the suitcase, which strokes would swallow
+// Brush strokes in the small card window. It holds only the suitcase, whose strokes are in its textures
+// (suitcase/paint.js) and swing with the lid, so there is no world to pin strokes to. A light wash keeps
+// those marks readable, and like the shop's strokes the paint stays still.
+const CARD_BRUSH = { still: true, radius: 2, bleed: 5, bleedMix: 0.3, bloom: 0.35, edge: 0.5, lift: 0.04, grain: 0.35 };
 export const PAINT_LEVELS = LEVELS.length;
 const validLevel = (v) => Number.isInteger(v) && v >= 0 && v < LEVELS.length;
 function levelFromUrl() {
@@ -355,8 +358,8 @@ export function renderOverlay(renderer, overlay) {
 export function createWatercolour(renderer, { card = false, level = levelFromUrl() } = {}) {
   const follow = level === null || level === undefined;
   if (follow) level = validLevel(settings.get('paint')) ? settings.get('paint') : LEVELS.length - 1;
-  if (card) level = Math.min(level, LAST_WASH_LEVEL);
-  let L = LEVELS[level];
+  const levelOf = (n) => (card && LEVELS[n]?.strokes ? CARD_BRUSH : LEVELS[n]);
+  let L = levelOf(level);
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   const target = new THREE.WebGLRenderTarget(size.x, size.y, {
     type: THREE.HalfFloatType,
@@ -602,10 +605,9 @@ void main() {
 
   function setLevel(n) {
     if (!validLevel(n)) return;
-    if (card) n = Math.min(n, LAST_WASH_LEVEL);
     if (n === level) return;
     level = n;
-    L = LEVELS[n];
+    L = levelOf(n);
     buildWash();
   }
   if (follow) settings.on('paint', setLevel);
@@ -626,7 +628,7 @@ void main() {
     render(scene, camera, t, overlay, sync) {
       const u = material.uniforms;
       u.borderSeed.value = (Math.floor(t * BOIL_FPS) % 64) * 1.37;
-      u.seed.value = brush ? 0 : u.borderSeed.value; // dry paint does not boil, but the sheet's ragged border does
+      u.seed.value = brush || L?.still ? 0 : u.borderSeed.value; // dry paint does not boil, but the sheet's ragged border does
       u.near.value = camera.near;
       u.far.value = camera.far;
       // Pan the paper with the camera's turn so cursor tilt moves scene and sheet together

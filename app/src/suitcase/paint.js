@@ -1,8 +1,12 @@
 // Everything the suitcase wears is painted here with canvas 2D, so the app ships no image files:
-// leather, quilted lining, speaker cloth, the grooves of the vinyl, glyphs for the buttons, soft
-// washes for the shadow and the shine. Colours are washes (warm, a little muted), never black.
+// leather, quilted lining, speaker cloth, the grooves of the vinyl, glyphs for the buttons, the shadow
+// and the shine. The surfaces carry the same brush strokes as the shop (brushpaint.js), in the texture
+// so they stay on their own part as the lid swings and the case leans. Their maps wrap every few units
+// of the case's own size (brushUV in model.js), so a stroke is the same size on every face.
+// Colours are washes (warm, a little muted), never black.
 import * as THREE from 'three';
 import { rng } from '../rand.js';
+import { coat, mark, LEAN } from '../brushpaint.js';
 
 export const COL = {
   leather: '#c98c57',
@@ -34,75 +38,51 @@ function texture(c, { repeat, srgb = true } = {}) {
   return t;
 }
 
-// Draw something that must tile by repeating it at the neighbouring offsets.
-function wrapped(S, fn) { for (const dx of [-S, 0, S]) for (const dy of [-S, 0, S]) fn(dx, dy); }
-
-function blobs(g, S, r, n, rad0, rad1, colours, alpha) {
-  for (let i = 0; i < n; i++) {
-    const x = r() * S, y = r() * S, rad = rad0 + r() * (rad1 - rad0);
-    const col = colours[Math.floor(r() * colours.length)], a = alpha * (0.6 + r() * 0.8);
-    wrapped(S, (dx, dy) => {
-      const gr = g.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, rad);
-      gr.addColorStop(0, `rgba(${col},${a})`);
-      gr.addColorStop(1, `rgba(${col},0)`);
-      g.fillStyle = gr;
-      g.fillRect(x + dx - rad, y + dy - rad, rad * 2, rad * 2);
-    });
-  }
+// A coat of strokes that tiles. `tile`: how many units of the case one repeat covers.
+function coated(tones, { S = 512, tile, len = 150, wid = 42, seed, extra }) {
+  const [c, g] = canvas(S, S);
+  g.fillStyle = tones[0];
+  g.fillRect(0, 0, S, S);
+  coat(g, S, S, { tones, len, wid, seed, tile: true });
+  extra?.(g, S);
+  return texture(c, { repeat: [1 / tile, 1 / tile] });
 }
 
-// Tan leather: a wash with pooled darker and lighter patches and a fine grain.
+// Tan leather.
 export function leatherTexture() {
-  const S = 256, [c, g] = canvas(S, S), r = rng(7);
-  g.fillStyle = COL.leather;
-  g.fillRect(0, 0, S, S);
-  blobs(g, S, r, 22, 30, 90, ['160,98,54', '236,178,120', '120,70,38'], 0.2);
-  for (let i = 0; i < 3600; i++) {
-    const x = r() * S, y = r() * S, s = 0.8 + r() * 1.8, dark = r() < 0.55, a = 0.05 + r() * 0.11;
-    g.fillStyle = dark ? `rgba(86,46,24,${a})` : `rgba(255,222,176,${a})`;
-    wrapped(S, (dx, dy) => g.fillRect(x + dx, y + dy, s, s));
-  }
-  return texture(c, { repeat: [1.6, 1.6] });
+  return coated(['#c98c57', '#bd7d49', '#d49a66', '#b3713f', '#d9a470', '#c48450', '#c9895a'], { tile: 2.6, seed: 7 });
 }
 
-// Cream lining of the lid, quilted in diamonds.
+// Cream lining of the lid.
 export function liningTexture() {
-  const S = 256, [c, g] = canvas(S, S), r = rng(11);
-  g.fillStyle = COL.lining;
-  g.fillRect(0, 0, S, S);
-  blobs(g, S, r, 14, 40, 100, ['214,186,130', '255,248,225'], 0.2);
-  const step = S / 4;
-  g.lineWidth = 2;
-  g.strokeStyle = 'rgba(150,112,64,.28)';
-  for (let i = -4; i <= 8; i++) {
-    g.beginPath(); g.moveTo(i * step, 0); g.lineTo(i * step + S, S); g.stroke();
-    g.beginPath(); g.moveTo(i * step, S); g.lineTo(i * step + S, 0); g.stroke();
-  }
-  g.fillStyle = 'rgba(150,112,64,.4)';
-  for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) {
-    g.beginPath(); g.arc(i * step, j * step, 3, 0, Math.PI * 2); g.fill();
-  }
-  for (let i = 0; i < 1500; i++) {
-    g.fillStyle = `rgba(150,112,64,${0.03 + r() * 0.05})`;
-    g.fillRect(r() * S, r() * S, 1.4, 1.4);
-  }
-  return texture(c, { repeat: [1, 1] });
+  return coated(['#f1e3bf', '#ecdbb2', '#f5eacc', '#e8d5a8', '#f7eed6'], { tile: 3, seed: 11 });
 }
 
-// Speaker cloth: a woven wheat colour.
+// The cream deck plate, in the same broad strokes as the lining but a quieter range, under the controls.
+export function deckTexture() {
+  return coated(['#e2d5b4', '#ddcfac', '#e7dbbd', '#d8c9a4', '#e4d8b9'], { tile: 3, seed: 23 });
+}
+
+// Speaker cloth: wheat strokes with the weave showing through.
 export function clothTexture() {
-  const S = 128, [c, g] = canvas(S, S), r = rng(5);
-  g.fillStyle = COL.cloth;
-  g.fillRect(0, 0, S, S);
-  blobs(g, S, r, 10, 20, 60, ['150,112,60', '250,236,190'], 0.16);
-  g.lineWidth = 1.4;
-  for (let i = -S; i < S * 2; i += 6) {
-    g.strokeStyle = 'rgba(110,80,36,.3)';
-    g.beginPath(); g.moveTo(i, 0); g.lineTo(i + S, S); g.stroke();
-    g.strokeStyle = 'rgba(255,248,214,.38)';
-    g.beginPath(); g.moveTo(i, S); g.lineTo(i + S, 0); g.stroke();
-  }
-  return texture(c, { repeat: [3, 2] });
+  return coated(['#d6c08a', '#cbb379', '#e0cd9c', '#c4aa6e'], {
+    S: 256, tile: 1, len: 90, wid: 26, seed: 5,
+    extra: (g, S) => {
+      g.lineWidth = 1.4;
+      for (let i = -S; i < S * 2; i += 8) {
+        g.strokeStyle = 'rgba(110,80,36,.24)';
+        g.beginPath(); g.moveTo(i, 0); g.lineTo(i + S, S); g.stroke();
+        g.strokeStyle = 'rgba(255,248,214,.26)';
+        g.beginPath(); g.moveTo(i, S); g.lineTo(i + S, 0); g.stroke();
+      }
+    },
+  });
+}
+
+// Strokes in shades of white, multiplied by a part's own colour: the metal, the deck, the caps and the
+// knob (whose colours change on hover) all stay plain colours that happen to be brushed on.
+export function strokesTexture() {
+  return coated(['#ffffff', '#f0ebe2', '#fff7ea', '#e4dccf', '#eef1f6', '#f7f2e8', '#d9d0c1'], { tile: 1.6, seed: 19, len: 140, wid: 40 });
 }
 
 // The face of the vinyl: concentric grooves in lighter greys, a few wide smooth bands between
@@ -111,6 +91,17 @@ export function vinylTexture(labelFraction) {
   const S = 1024, [c, g] = canvas(S, S), m = S / 2, r = rng(21);
   g.fillStyle = COL.vinyl;
   g.beginPath(); g.arc(m, m, m, 0, Math.PI * 2); g.fill();
+  // pulled round the record, then cut off at its edge
+  g.save();
+  g.beginPath(); g.arc(m, m, m, 0, Math.PI * 2); g.clip();
+  for (let ring = m * labelFraction + 30; ring < m; ring += 42) {
+    const n = Math.round((ring * Math.PI * 2) / 150);
+    for (let i = 0; i < n; i++) {
+      const a = ((i + r()) / n) * Math.PI * 2;
+      mark(g, m + Math.cos(a) * ring, m + Math.sin(a) * ring, 230, 58, a + Math.PI / 2, ['#2d262c', '#393037', '#241e25', '#40363c'][Math.floor(r() * 4)], r);
+    }
+  }
+  g.restore();
   let rad = m * labelFraction + 8;
   const limit = m * 0.965;
   while (rad < limit) {
@@ -165,17 +156,13 @@ export function sheenTexture(labelFraction) {
   return texture(c);
 }
 
-// A loose wash of brown under the case: the shadow is a painted patch, not a rendered one.
+// Brown strokes under the case: the shadow is painted, on the same diagonal, thinning out from the middle.
 export function shadowTexture() {
-  const S = 256, [c, g] = canvas(S, S), r = rng(31);
-  for (let i = 0; i < 16; i++) {
-    const x = S / 2 + (r() - 0.5) * S * 0.46, y = S / 2 + (r() - 0.5) * S * 0.4, rad = S * (0.18 + r() * 0.22);
-    const gr = g.createRadialGradient(x, y, 0, x, y, rad);
-    gr.addColorStop(0, 'rgba(96,66,50,.2)');
-    gr.addColorStop(0.65, 'rgba(96,66,50,.12)');
-    gr.addColorStop(1, 'rgba(96,66,50,0)');
-    g.fillStyle = gr;
-    g.fillRect(0, 0, S, S);
+  const S = 512, [c, g] = canvas(S, S), r = rng(31);
+  for (let i = 0; i < 150; i++) {
+    const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 0.46;
+    const x = S / 2 + Math.cos(a) * d * S, y = S / 2 + Math.sin(a) * d * S * 0.9;
+    mark(g, x, y, 130 + r() * 60, 34 + r() * 16, LEAN + (r() - 0.5) * 0.14, ['#604232', '#6d4c3a', '#573b30'][Math.floor(r() * 3)], r, 0.3 * (1 - (d / 0.46) ** 2));
   }
   return texture(c);
 }
@@ -233,41 +220,29 @@ export function washBlend(material) {
   return material;
 }
 
-// A loose watercolour backdrop for the small window's card: paper with a few pooled washes laid in
-// layers, each a soft blob whose edge dried a little darker.
-export function washBackdrop(w, h) {
-  const [c, g] = canvas(w, h), r = rng(77);
+// The small window's backdrop: a coat of pale strokes over the paper, one diagonal as in the shop, its
+// colour drifting across the sheet from one pooled patch to the next. Drawn at twice the card's size.
+export function brushBackdrop(w, h) {
+  const S = 2, [c, g] = canvas(w * S, h * S);
   g.fillStyle = '#f6ebd0';
-  g.fillRect(0, 0, w, h);
-  const washes = [
-    ['178,196,168', 0.12, 0.5, 0.62], ['236,184,156', 0.88, 0.2, 0.55], ['170,188,214', 0.1, 0.1, 0.42],
-    ['240,208,140', 0.85, 0.85, 0.55], ['208,172,192', 0.4, 0.98, 0.42], ['190,205,170', 0.7, 0.55, 0.4],
+  g.fillRect(0, 0, w * S, h * S);
+  const pools = [
+    [[178, 196, 168], 0.12, 0.5], [[236, 184, 156], 0.88, 0.2], [[170, 188, 214], 0.1, 0.1],
+    [[240, 208, 140], 0.85, 0.85], [[208, 172, 192], 0.4, 0.98], [[190, 205, 170], 0.7, 0.55],
   ];
-  for (const [col, fx, fy, fr] of washes) {
-    const cx = fx * w, cy = fy * h, rad = fr * Math.min(w, h);
-    const blob = () => {
-      const n = 9, pts = [];
-      for (let i = 0; i < n; i++) {
-        const a = (i / n) * Math.PI * 2 + r() * 0.3, rr = rad * (0.7 + r() * 0.4);
-        pts.push([cx + Math.cos(a) * rr * 1.2, cy + Math.sin(a) * rr * 0.95]);
-      }
-      const p = new Path2D();   // a smooth closed curve through the midpoints
-      const mid = (i) => [(pts[i % n][0] + pts[(i + 1) % n][0]) / 2, (pts[i % n][1] + pts[(i + 1) % n][1]) / 2];
-      p.moveTo(...mid(n - 1));
-      for (let i = 0; i < n; i++) p.quadraticCurveTo(pts[i][0], pts[i][1], ...mid(i));
-      p.closePath();
-      return p;
-    };
-    g.save();
-    g.filter = 'blur(3px)';
-    for (let k = 0; k < 5; k++) { g.fillStyle = `rgba(${col},0.1)`; g.fill(blob()); }   // glazes: each pass a little different
-    g.strokeStyle = `rgba(${col},0.3)`; g.lineWidth = 2.5; g.stroke(blob());               // the wet edge
-    g.restore();
-  }
-  for (let i = 0; i < w * h * 0.01; i++) {                                                  // paper tooth
-    g.fillStyle = `rgba(150,120,80,${0.02 + r() * 0.04})`;
-    g.fillRect(r() * w, r() * h, 1.5, 1.5);
-  }
+  const tones = (x, y, r) => {
+    let sum = 0;
+    const col = [0, 0, 0];
+    for (const [rgb, fx, fy] of pools) {
+      const k = 1 / (0.012 + ((x / (w * S) - fx) ** 2 + (y / (h * S) - fy) ** 2));
+      sum += k;
+      for (let i = 0; i < 3; i++) col[i] += rgb[i] * k;
+    }
+    const lift = 0.04 + r() * 0.28;   // no two loads of the brush are as strong
+    return col.map((v, i) => Math.round((v / sum) * (1 - lift) + [246, 235, 208][i] * lift) & ~3);
+  };
+  coat(g, w * S, h * S, { tones, len: 420, wid: 130, seed: 76, rowGap: 0.26, colGap: 0.6 });   // the first coat closes the sheet
+  coat(g, w * S, h * S, { tones, len: 300, wid: 92, seed: 77, rowGap: 0.24, colGap: 0.55 });
   return texture(c);
 }
 

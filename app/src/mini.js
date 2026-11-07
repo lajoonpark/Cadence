@@ -15,7 +15,7 @@ import { createMusic } from './music.js';
 import { createSuitcase, startSong } from './suitcase.js';
 import { createCaption } from './controls.js';
 import { fitCamera } from './suitcase/fit.js';
-import { washBackdrop } from './suitcase/paint.js';
+import { brushBackdrop } from './suitcase/paint.js';
 import { createFlights } from './suitcase/flight.js';
 import { createDiscMachine } from './suitcase/machine.js';
 import { createSearch } from './search.js';
@@ -44,7 +44,7 @@ const painter = WATERCOLOUR ? createWatercolour(renderer, { card: true }) : null
 const music = createMusic();
 const suitcase = createSuitcase({ music });
 const scene = new THREE.Scene();
-scene.background = washBackdrop(540, 620);
+scene.background = brushBackdrop(W, H);
 scene.add(suitcase.root);
 
 const camera = new THREE.PerspectiveCamera(30, size().w / size().h, 1, 120);

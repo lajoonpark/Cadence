@@ -5,6 +5,7 @@
 // brush stroke, the way a painter masks out whites.
 import { rng } from './rand.js';
 import { FONT } from './style.js';
+import { brushBand, TONES } from './brushpaint.js';
 
 export const INK = '#2d3158';   // indigo wash
 export const HOT = '#b4503a';   // terracotta on hover / liked
@@ -200,7 +201,7 @@ const TAG_CSS = `
   background: ${PAPER}; color: #2b2436;
   clip-path: polygon(0 6%, 18% 0, 47% 4%, 72% 0, 100% 5%, 98% 52%, 100% 96%, 66% 100%, 38% 95%, 9% 100%, 2% 60%);
   filter: drop-shadow(0 2px 0 rgba(60,40,30,.15)); transform: rotate(-2deg); transition: opacity .4s; }
-.cad-tag.mini .cap { width: 100%; }
+.cad-tag.mini .cap { width: 100%; padding: 12px 26px 12px 24px; clip-path: none; filter: none; background: var(--cap) 0 0 / 100% 100% no-repeat; }
 .cad-tag .cap .t { font-size: 27px; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cad-tag .cap .a { font-size: 19px; color: #7a5a40; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cad-tag .cap .bar { position: relative; height: 14px; margin-top: 5px; cursor: pointer; }
@@ -209,6 +210,12 @@ const TAG_CSS = `
 .cad-tag .cap .bar i { position: absolute; left: 0; top: 3px; height: 6px; border-radius: 3px 6px 6px 3px; background: ${INK}; opacity: .85; transition: background .15s, height .15s, top .15s; }
 .cad-tag .cap .bar:hover i { top: 2px; height: 8px; background: ${HOT}; }
 .cad-tag .cap.empty { opacity: 0; pointer-events: none; }
+/* the small window's progress line is a pull of the brush, shown as far as the song has got */
+.cad-tag.mini .cap .bar { height: 16px; }
+.cad-tag.mini .cap .bar::before, .cad-tag.mini .cap .bar:hover::before { top: 0; height: 100%; background: var(--track) 0 0 / 100% 100% no-repeat; border-radius: 0; }
+.cad-tag.mini .cap .bar i, .cad-tag.mini .cap .bar:hover i { top: 0; height: 100%; opacity: 1; border-radius: 0; background: var(--fill) 0 0 / var(--barw) 100% no-repeat;
+  mask-image: linear-gradient(to left, transparent, #000 7px); }
+.cad-tag.mini .cap .bar:hover i { background-image: var(--fillhot); }
 .cad-tag button { pointer-events: auto; position: relative; border: 0; padding: 0; background: none; cursor: pointer;
   font-family: ${FONT}; color: ${PAPER}; line-height: 1; letter-spacing: .02em; margin-left: 10px;
   transition: transform .18s cubic-bezier(.3,1.6,.5,1); }
@@ -252,7 +259,22 @@ export function createCaption({ parent = document.body, variant = 'shop', onSeek
     cold.style.backgroundImage = `url(${brushStroke(Math.ceil(width), Math.ceil(height), INK, 41)})`;
     hot.style.backgroundImage = `url(${brushStroke(Math.ceil(width), Math.ceil(height), HOT, 41)})`;
   };
-  const fontReady = (document.fonts?.load(`38px ${FONT}`) ?? Promise.resolve()).then(paint, paint);
+  // The small window's tag is brushed like its card; the shop's stays torn paper for now.
+  let paintedW = 0;
+  const paintCap = () => {
+    const { width, height } = cap.getBoundingClientRect();
+    const barW = bar.offsetWidth;
+    if (variant !== 'mini' || !width || !barW || paintedW === width) return;
+    paintedW = width;
+    root.style.setProperty('--cap', `url(${brushBand(Math.ceil(width), Math.ceil(height), { tones: TONES.paper, seed: 61, rows: 3 })})`);
+    root.style.setProperty('--barw', `${barW}px`);
+    const line = (tones, seed) => `url(${brushBand(barW, 16, { tones, seed, rows: 1 })})`;
+    root.style.setProperty('--track', line(['#dcd2c0', '#e2d9c8', '#d5cab6'], 62));
+    root.style.setProperty('--fill', line(TONES.ink, 63));
+    root.style.setProperty('--fillhot', line(TONES.hot, 64));
+  };
+  const fontReady = (document.fonts?.load(`38px ${FONT}`) ?? Promise.resolve()).then(() => { paint(); paintCap(); }, () => { paint(); paintCap(); });
+  if (variant === 'mini') new ResizeObserver(() => fontReady.then(paintCap)).observe(cap);
 
   let duration = 0, scrubP = null, lastP = 0;
   bar.addEventListener('click', (e) => {

@@ -1,6 +1,7 @@
 // Search bar. Opens with Option+Cmd+S (macOS) or Ctrl+Alt+S: a swipe of cream paint on a swipe of indigo,
 // top centre, with the results brushed in under it row by row, the chosen one painted over in terracotta.
-// All of it is laid with the shop's brush (brushpaint.js).
+// All of it is laid with the shop's brush (brushpaint.js). The bar is slapped on and flicked off as paint
+// (searchpaint.js); the results follow in zigzag, one row each way, as a painter's arm goes.
 //
 //   const search = createSearch({ music, onPlay, suggest });   // music.search(q) -> Promise<items>
 //   search.open() / close() / toggle() / isOpen()
@@ -18,7 +19,8 @@
 import { rng } from './rand.js';
 import { FONT } from './style.js';
 import { INK, PAPER } from './controls.js';
-import { brushBand, TONES } from './brushpaint.js';
+import { brushBand, brushBandCanvas, TONES } from './brushpaint.js';
+import { createBarPaint, slipMasks, MARGIN, SLIP_FRAMES } from './searchpaint.js';
 import { paintedCoverURL } from './coverpaint.js';
 
 const HOT = '#b4503a';           // terracotta on the chosen slip
@@ -27,16 +29,15 @@ const MAX_SLIPS = 20;          // the slips scroll
 const BAR_H = 88;
 const SLIP_H = 66;
 const SLIP_COATS = 5, HOT_COATS = 3;   // rows take turns with a few painted swipes: they are slow to paint, quick to reuse
-const WIPE_HIDE = 'inset(-14px 100% -14px -14px)', WIPE_SHOW = 'inset(-14px -14px -14px -14px)';   // paint arrives from the left, as the brush travels
 
 const CSS = `
 .cs { position: fixed; top: 3.2vh; left: 50%; width: min(640px, 92vw); z-index: 60; transform: translateX(-50%);
   pointer-events: none; visibility: hidden; font-family: ${FONT}; user-select: none; }
 .cs.show { pointer-events: auto; visibility: visible; }
-.cs-bar { position: relative; height: ${BAR_H}px; opacity: 0; transform: rotate(-1.2deg); clip-path: ${WIPE_HIDE};
-  transform-origin: 20% 0; transition: opacity .12s ease, transform .4s ease, clip-path .36s cubic-bezier(.3,.7,.3,1); background-size: 100% 100%; }
-.cs.show .cs-bar { opacity: 1; transform: rotate(-.6deg); clip-path: ${WIPE_SHOW}; }
-.cs-paper { position: absolute; left: 32px; right: 50px; top: 16px; bottom: 16px; background-size: 100% 100%; display: flex; align-items: center;
+.cs.closing { visibility: visible; }
+.cs-bar { position: relative; height: ${BAR_H}px; transform: rotate(-.6deg); transform-origin: 20% 40%; }
+.cs-fx { position: absolute; left: -${MARGIN}px; top: -${MARGIN}px; width: calc(100% + ${MARGIN * 2}px); height: ${BAR_H + MARGIN * 2}px; pointer-events: none; }
+.cs-paper { position: absolute; left: 32px; right: 50px; top: 16px; bottom: 16px; display: flex; align-items: center;
   padding: 0 26px 0 22px; gap: 8px; }
 .cs-paper svg { flex: none; width: 32px; height: 32px; margin-top: 2px; }
 .cs-input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: 38px/1 ${FONT}; color: #2b2436; padding: 6px 0 2px;
@@ -50,12 +51,23 @@ const CSS = `
 .cs-list::-webkit-scrollbar { width: 6px; } .cs-list::-webkit-scrollbar-thumb { background: rgba(45,49,88,.45); border-radius: 3px; }
 .cs-head { position: relative; display: inline-block; margin: 0 0 4px 22px; padding: 4px 26px 4px 18px; color: ${PAPER}; font-size: 26px;
   background-size: 100% 100%; background-image: var(--note); transform: rotate(-1.2deg); }
+.cs.show .cs-head { animation: cs-head .34s cubic-bezier(.2,.8,.3,1) var(--lead, 0ms) both; }
+.cs.closing .cs-head { animation: cs-lift .16s ease-in both; }
 .cs-head[hidden] { display: none; }
 .cs-list.stale { opacity: .55; }
-.cs-slipwrap { margin-top: -7px; transform: rotate(var(--r)); clip-path: ${WIPE_HIDE};
-  animation: cs-wipe .3s cubic-bezier(.3,.7,.3,1) forwards; animation-delay: calc(var(--i) * 30ms); cursor: pointer; }
-.cs:not(.show) .cs-slipwrap { animation: none; }
-@keyframes cs-wipe { to { clip-path: ${WIPE_SHOW}; } }
+.cs-slipwrap { --sx: -16px; margin-top: -7px; transform: rotate(var(--r)); cursor: pointer;
+  mask-image: var(--mask-l); mask-repeat: no-repeat; mask-size: 100% ${SLIP_FRAMES * 100}%; }
+.cs-slipwrap:nth-child(even) { --sx: 16px; mask-image: var(--mask-r); }
+.cs.show .cs-slipwrap { --at: calc(var(--lead, 0ms) + var(--i) * 34ms);
+  animation: cs-mask .26s steps(${SLIP_FRAMES - 1}, jump-none) var(--at) both, cs-land .34s cubic-bezier(.2,.8,.3,1) var(--at) both; }
+.cs.closing .cs-slipwrap { animation: cs-mask .17s steps(${SLIP_FRAMES - 1}, jump-none) var(--o, 0ms) reverse both, cs-lift .17s ease-in var(--o, 0ms) both; }
+.cs:not(.show):not(.closing) .cs-slipwrap { animation: none; }
+.cs .cs-slipwrap.set { animation: none; mask-image: none; }
+@keyframes cs-mask { from { mask-position: 0 0%; } to { mask-position: 0 100%; } }
+@keyframes cs-land { 0% { translate: var(--sx, -16px) -9px; scale: 1 .8; rotate: -1.6deg; } 55% { translate: 0 2px; scale: 1 1.07; rotate: .4deg; } 100% { translate: 0 0; scale: 1 1; rotate: 0deg; } }
+@keyframes cs-head { 0% { opacity: 0; translate: -16px -9px; scale: 1 .8; } 55% { opacity: 1; translate: 0 2px; scale: 1 1.07; } 100% { translate: 0 0; scale: 1 1; } }   /* no mask to hide it while it waits */
+@keyframes cs-lift { to { translate: 0 -10px; scale: 1 .86; opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cs .cs-slipwrap, .cs .cs-head { animation: none !important; mask-image: none; } }
 .cs-slip { position: relative; height: ${SLIP_H}px; background-size: 100% 100%; display: flex; align-items: center; gap: 14px;
   padding: 0 34px 0 22px; color: #2b2436; transition: color .15s; }
 .cs-hl { position: absolute; inset: 0; background-size: 100% 100%; opacity: 0; transition: opacity .18s; pointer-events: none; }
@@ -91,13 +103,25 @@ export function createSearch({ music, onPlay, suggest = null }) {
 
   const root = document.createElement('div');
   root.className = 'cs';
-  root.innerHTML = `<div class="cs-bar"><div class="cs-paper">${GLASS}<input class="cs-input" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="search songs" aria-label="Search songs"></div></div><div class="cs-head" hidden></div><ul class="cs-list"></ul>`;
+  root.innerHTML = `<div class="cs-bar"><canvas class="cs-fx"></canvas><div class="cs-paper">${GLASS}<input class="cs-input" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="search songs" aria-label="Search songs"></div></div><div class="cs-head" hidden></div><ul class="cs-list"></ul>`;
   document.body.appendChild(root);
   const bar = root.querySelector('.cs-bar');
   const paper = root.querySelector('.cs-paper');
   const input = root.querySelector('.cs-input');
   const list = root.querySelector('.cs-list');
   const head = root.querySelector('.cs-head');
+  const masks = slipMasks();
+  root.style.setProperty('--mask-l', masks.fromLeft);
+  root.style.setProperty('--mask-r', masks.fromRight);
+  const paint = createBarPaint({
+    canvas: root.querySelector('.cs-fx'), bar, input,
+    glass: paper.querySelector('svg'),
+    onClosed: () => root.classList.remove('closing'),
+  });
+  // a slip has done its arriving: drop the mask, which would otherwise be redrawn with every hover
+  list.addEventListener('animationend', (e) => {
+    if (e.animationName === 'cs-land' && root.classList.contains('show')) e.target.classList.add('set');
+  });
 
   // The paint is drawn to the final size once the brush font is in (sizes follow the window).
   let paintedW = 0;
@@ -106,8 +130,12 @@ export function createSearch({ music, onPlay, suggest = null }) {
     if (!w || paintedW === w) return;
     paintedW = w;
     const slipW = Math.ceil((list.getBoundingClientRect().width || w - 12) - 24);
-    bar.style.backgroundImage = `url(${brushBand(w, BAR_H, { tones: TONES.ink, seed: 21, rows: 3 })})`;
-    paper.style.backgroundImage = `url(${brushBand(paper.offsetWidth || w - 82, paper.offsetHeight || BAR_H - 32, { tones: TONES.paper, seed: 5, rows: 2 })})`;
+    const paperRect = { x: paper.offsetLeft, y: paper.offsetTop, w: paper.offsetWidth || w - 82, h: paper.offsetHeight || BAR_H - 32 };
+    paint.setLayers({
+      w, h: BAR_H, paperRect,
+      ink: brushBandCanvas(w, BAR_H, { tones: TONES.ink, seed: 21, rows: 3 }),
+      paper: brushBandCanvas(paperRect.w, paperRect.h, { tones: TONES.paper, seed: 5, rows: 2 }),
+    });
     for (let i = 0; i < SLIP_COATS; i++) root.style.setProperty(`--slip${i}`, `url(${brushBand(slipW, SLIP_H, { tones: TONES.paper, seed: 200 + i * 13, rows: 2 })})`);
     for (let i = 0; i < HOT_COATS; i++) root.style.setProperty(`--hl${i}`, `url(${brushBand(slipW, SLIP_H, { tones: TONES.hot, seed: 33 + i * 7, rows: 2 })})`);
     root.style.setProperty('--note', `url(${brushBand(slipW - 10, SLIP_H - 6, { tones: TONES.ink, seed: 47, rows: 2 })})`);
@@ -134,13 +162,14 @@ export function createSearch({ music, onPlay, suggest = null }) {
   function note(html) {
     head.hidden = true;
     list.className = 'cs-list';
-    list.innerHTML = `<li class="cs-slipwrap" style="--i:0;--r:-.6deg"><div class="cs-note" style="background-image:var(--note)">${html}</div></li>`;
+    list.innerHTML = `<li class="cs-slipwrap" style="--i:0;--r:-.6deg;--lead:${paint.lead()}ms"><div class="cs-note" style="background-image:var(--note)">${html}</div></li>`;
   }
 
   function render(items, title = null) {
     shown = items.slice(0, MAX_SLIPS);
     head.hidden = !title;
     head.textContent = title ?? '';
+    head.style.setProperty('--lead', `${paint.lead()}ms`);
     list.className = 'cs-list';
     list.innerHTML = '';
     list.scrollTop = 0;
@@ -149,7 +178,8 @@ export function createSearch({ music, onPlay, suggest = null }) {
       const r = rng(100 + i * 17);
       const li = document.createElement('li');
       li.className = 'cs-slipwrap';
-      li.style.setProperty('--i', i);
+      li.style.setProperty('--i', Math.min(i, 10));   // what is past the fold need not wait its turn
+      li.style.setProperty('--lead', `${paint.lead()}ms`);
       li.style.setProperty('--r', `${((r() - 0.5) * 1.8).toFixed(2)}deg`);
       li.style.marginLeft = `${Math.round((r() - 0.5) * 14)}px`;
       li.style.marginRight = `${Math.round(r() * 12)}px`;
@@ -264,7 +294,10 @@ export function createSearch({ music, onPlay, suggest = null }) {
     if (isOpen) return;
     isOpen = true;
     fontReady.then(paintStrokes);
+    root.classList.remove('closing');
     root.classList.add('show');
+    paint.play(true);
+    for (const el of [head, ...list.children]) el.style.setProperty('--lead', `${paint.lead()}ms`);   // what is already there waits for the bar to land
     input.focus({ preventScroll: true });
     input.select();
     openCount++;
@@ -277,7 +310,14 @@ export function createSearch({ music, onPlay, suggest = null }) {
     clearTimeout(timer);
     seq++; // answers still on their way are dropped
     pendingEnter = false;
-    root.classList.remove('show');
+    // bottom row first, in the time the bar takes to go; only the rows on screen count
+    const box = list.getBoundingClientRect();
+    const seen = [...list.children].filter((el) => { const b = el.getBoundingClientRect(); return b.bottom > box.top && b.top < box.bottom; });
+    const step = Math.min(24, 130 / (seen.length || 1));
+    seen.forEach((el, k) => el.style.setProperty('--o', `${Math.round((seen.length - 1 - k) * step)}ms`));
+    for (const el of list.children) el.classList.remove('set');
+    root.classList.replace('show', 'closing');
+    paint.play(false);
     input.blur();
     openCount--;
   }

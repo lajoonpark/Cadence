@@ -65,8 +65,10 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
 - **Volume**: on macOS the knob, scroll and ↑ ↓ set the Mac's own output volume (`electron/sysvolume.cjs`,
   osascript) and the player stays at 100%, so you can turn it up past where the Mac was. Elsewhere it
   is the player's volume.
-- **Search**: **⌥⌘S** (Ctrl+Alt+S on Windows/Linux) opens a search bar (`src/search.js`); songs are
-  brushed in row by row with the shop's brush (`src/brushpaint.js`), arrows + Enter or a click plays one. A song from search has no sleeve, so a
+- **Search**: **⌥⌘S** (Ctrl+Alt+S on Windows/Linux) opens a search bar (`src/search.js`). The bar is
+  slapped on bristle by bristle, throwing droplets, and flicked off the right-hand end when it closes
+  (`src/searchpaint.js`; the same in the shop and the mini window, no animation under the system's reduce-motion setting). Songs are
+  brushed in row by row, zigzagging, with the shop's brush (`src/brushpaint.js`), arrows + Enter or a click plays one. A song from search has no sleeve, so a
   little painted record machine pops up by the suitcase, whirs, spits the record out of its top onto
   the platter and pops away (`src/suitcase/machine.js`; `?machine=1.2` freezes it for screenshots).
 - **Settings**: the SETTINGS word (top right) or **⌘,** (Ctrl+, elsewhere) opens a paper card

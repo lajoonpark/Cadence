@@ -132,7 +132,10 @@ export function coat(g, w, h, { tones, len, wid, seed = 1, lean = LEAN, rowGap =
 // coat on the same diagonal as the shop goes over, on this body only (as the world's strokes keep to their
 // own surface), so it reads as brushwork and not as a flat label. Solid enough in the middle to carry text.
 //   body: tones for the long pulls (coat tones default to the same)   rows: long pulls one above another
-export function brushBand(w, h, { tones, coatTones = tones, seed = 1, rows = 2, scale = 2 }) {
+export const brushBand = (w, h, opts) => brushBandCanvas(w, h, opts).toDataURL();
+
+// The same swipe as a canvas, for what draws it itself (searchpaint.js).
+export function brushBandCanvas(w, h, { tones, coatTones = tones, seed = 1, rows = 2, scale = 2 }) {
   const c = document.createElement('canvas');
   c.width = Math.ceil(w * scale); c.height = Math.ceil(h * scale);
   const g = c.getContext('2d');
@@ -154,7 +157,7 @@ export function brushBand(w, h, { tones, coatTones = tones, seed = 1, rows = 2, 
   }
   g.globalCompositeOperation = 'source-atop';
   coat(g, w, h, { tones: coatTones, len: Math.max(h * 1.5, 46), wid: Math.max(h * 0.42, 13), seed: seed + 1, rowGap: 0.34, colGap: 0.72, alpha: 0.9 });
-  return c.toDataURL();
+  return c;
 }
 
 // the palettes of the 2D paint

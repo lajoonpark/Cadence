@@ -6,7 +6,7 @@ import { _electron as electron } from 'playwright';
 const S = process.argv[2];
 const app = await electron.launch({
   cwd: '/srv/projects/Cadence/app',
-  args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', `--user-data-dir=${S}/ud`, '.'],
+  args: ['--no-sandbox', '--use-gl=angle', '--use-angle=vulkan', '--ignore-gpu-blocklist', `--user-data-dir=${S}/ud`, '.'],
   timeout: 60000,
 });
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
@@ -21,8 +21,9 @@ log('main window', page.url());
 await page.waitForFunction(() => window.__cadenceDebug?.shelves.length > 0, null, { timeout: 180000 });
 log('shelves', await page.evaluate(() => window.__cadenceDebug.shelves.map((s) => `${s.title}(${s.items.length})`).join(', ')));
 // the intro ends at HOME; then fly to station 0 (the crate table) and wait until we are settled there
-// (SwiftShader under xvfb runs a few frames a second and flights advance per frame, so allow minutes)
+// (generous timeouts, so a slow machine still passes)
 await page.waitForFunction(() => window.__cadenceDebug.state.introDone, null, { timeout: 60000 });
+await page.waitForFunction(() => window.__cadenceDebug.state.settled, null, { timeout: 60000 }); // go() is ignored until the intro has handed over
 await page.evaluate(() => window.__cadenceDebug.go(0));
 await page.waitForFunction(() => window.__cadenceDebug.state.settled && window.__cadenceDebug.state.at === 0, null, { timeout: 240000 });
 await new Promise((r) => setTimeout(r, 2500)); // the records drop in

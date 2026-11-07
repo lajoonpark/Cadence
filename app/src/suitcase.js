@@ -18,6 +18,7 @@
 // Controls: previous, playPause, next, like (buttons), knob, record (drag to seek).
 import * as THREE from 'three';
 import { paintCover, coverSeed } from './coverpaint.js';
+import { paintOffThread } from './coverworker.js';
 import { settings } from './settings.js';
 import { LAYOUT as L, COMMANDS, isButton, armAngleForProgress, parkedArmAngle } from './tonearm.js';
 import { LidHinge, DEFAULT_STOP } from './lid.js';
@@ -60,14 +61,21 @@ export function coverFromUrl(url) {
   const img = new Image();
   img.crossOrigin = 'anonymous';
   t.userData.loaded = new Promise((res) => {
-    img.onload = () => {
+    img.onload = async () => {
       // drawn again when Settings > Cover art changes
-      (t.userData.repaint = () => {
-        const s = Math.min(img.width, img.height);
-        g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 512, 512);
-        paintCover(g, 512, coverSeed(url));
+      t.userData.repaint = async () => {
+        const done = await paintOffThread(url, 512); // tens of ms of painting, as a record takes off
+        if (done) {
+          g.drawImage(done.bitmap, 0, 0);
+          done.bitmap.close();
+        } else {
+          const s = Math.min(img.width, img.height);
+          g.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 512, 512);
+          paintCover(g, 512, coverSeed(url));
+        }
         t.needsUpdate = true;
-      })();
+      };
+      await t.userData.repaint();
       res(true);
     };
     img.onerror = () => res(false);

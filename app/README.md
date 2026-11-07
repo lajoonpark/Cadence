@@ -90,8 +90,10 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
 - **Keys**: Space play/pause, ← → back/skip, ↑ ↓ or scroll for volume, L like.
 - Covers and tags are drawn sharp: they write alpha 0 into the scene buffer (`crisp()` / `keepSharp()` in
   `materials.js`, also the CADENCE sign) and the watercolour pass leaves those pixels alone. The covers
-  themselves are repainted once when they load (`src/coverpaint.js`: softened detail, a little colour
-  bleed, uneven drying, paper grain, an unpainted margin), so real album art sits in the painting.
+  themselves are repainted once when they load (`src/coverpaint.js`: a first wash, then real brush strokes on the
+  shop's diagonal with colours read from the cover, finer marks where it has detail, paper grain and an unpainted
+  margin), so real album art sits in the painting. The racks and the suitcase paint them in a worker
+  (`src/coverworker.js`, `src/coverpaint.worker.js`), since strokes take 40-100 ms a cover. Settings > Cover art sets the strength.
 - In a plain browser (`npm run web`, screenshots) `src/music.js` fakes a record store with painted
   covers, so the shop can be worked on without Electron or an account.
 - Dev pages for screenshots: `lab.html?station=N` (one rack), `player-lab.html` (the suitcase in the shop),

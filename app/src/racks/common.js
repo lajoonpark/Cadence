@@ -38,11 +38,11 @@
 //   fontReady  Promise (brush font loaded).  smooth(rate, dt), easeOut(t), clamp01.
 // ---------------------------------------------------------------------------------------------
 import * as THREE from 'three';
-import { paintCover, coverSeed, coverLevel } from '../coverpaint.js';
+import { paintCover, coverSeed } from '../coverpaint.js';
 import { settings } from '../settings.js';
 import { chooseDiscDir } from './clear.js';
 import { uploadSoon } from '../warmup.js';
-import CoverWorker from '../coverpaint.worker.js?worker&inline';
+import { paintOffThread } from '../coverworker.js';
 import { toon, crisp } from '../materials.js';
 import { rng } from '../rand.js';
 import { brushStroke, INK, PAPER } from '../controls.js';
@@ -163,37 +163,6 @@ export function getCover(url, size = 256) {
 }
 settings.on('covers', () => { for (const e of covers.values()) e.repaint?.(); });
 
-// ---- the cover painter worker (coverpaint.worker.js) ----
-let worker, workerJobs = new Map(), workerId = 0;
-function coverWorker() {
-  if (worker !== undefined) return worker;
-  worker = null;
-  try {
-    if (typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return null;
-    worker = new CoverWorker();
-    worker.onmessage = ({ data }) => {
-      const job = workerJobs.get(data.id);
-      workerJobs.delete(data.id);
-      job?.(data.error ? null : data);
-    };
-    worker.onerror = () => { // the worker itself broke: everything still waiting is painted here instead
-      for (const job of workerJobs.values()) job(null);
-      workerJobs.clear();
-      worker?.terminate(); worker = null;
-    };
-  } catch { worker = null; }
-  return worker;
-}
-// resolves { bitmap, color } or null (then paint on the main thread)
-function paintOffThread(url, size) {
-  const w = coverWorker();
-  if (!w) return Promise.resolve(null);
-  return new Promise((res) => {
-    const id = ++workerId;
-    workerJobs.set(id, res);
-    w.postMessage({ id, url, size, level: coverLevel() });
-  });
-}
 // the old way: an <img>, painted on the main thread a few per frame
 function paintHere(url, size, g, tex, e) {
   return new Promise((res) => {

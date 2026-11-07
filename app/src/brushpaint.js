@@ -1,5 +1,5 @@
 // The shop's brush on a 2D canvas, for what the world's pinned strokes (brushstrokes.js) cannot reach:
-// the search bars, the small window's card and everything the suitcase wears. A mark here is the same
+// the search bars, the small window's card, everything the suitcase wears and (its shapes, via coverpaint.js) the covers. A mark here is the same
 // mark as there (the same shape as atlasFragment: ragged sides, bristle tracks, a dry tail, a wet rim),
 // and a coat is laid the same way: staggered rows, all pulled in one direction.
 import { rng } from './rand.js';
@@ -7,8 +7,9 @@ import { rng } from './rand.js';
 // The diagonal the arm falls into, as brushstrokes.js LEAN (a canvas's y runs down, so the sign flips).
 export const LEAN = 0.5;
 
-const W = 192, H = 48, VARIANTS = 6;
-const COVERED = 0.6;    // how much of a stamp's height the mark fills
+export const STAMP_W = 192, STAMP_H = 48, VARIANTS = 6;
+const W = STAMP_W, H = STAMP_H;
+export const COVERED = 0.6;    // how much of a stamp's height the mark fills
 
 // value noise from a table: stamps are made on the main thread, so this has to be cheap
 const TABLE = (() => { const r = rng(99); return Float32Array.from({ length: 65536 }, () => r()); })();
@@ -23,9 +24,9 @@ function noise(x, y) {
 const fbm = (x, y) => noise(x, y) * 0.55 + noise(x * 2.1 + 7.3, y * 2.1 + 7.3) * 0.3 + noise(x * 4.3 + 1.7, y * 4.3 + 1.7) * 0.15;
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
-// coverage, pigment density and wet rim of each variant, once
+// coverage, pigment density and wet rim of each variant, once (coverpaint.js presses these straight into pixels)
 let shapes = null;
-function brushShapes() {
+export function brushShapes() {
   if (shapes) return shapes;
   shapes = [];
   for (let k = 0; k < VARIANTS; k++) {

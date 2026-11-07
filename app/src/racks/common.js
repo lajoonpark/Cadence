@@ -291,7 +291,7 @@ export class Sleeve {
     this.size = size;
     this.thick = thick;
     this.seed = seed;
-    this.lift = 0; this.liftV = 0; this.liftRate = 1; this.peek = 0; this.bump = 0; this.appear = 0; this.drop = 1;
+    this.fit = 0; this.fitTo = 0; this.lift = 0; this.liftV = 0; this.liftRate = 1; this.peek = 0; this.bump = 0; this.appear = 0; this.drop = 1;
     this.empty = false;      // the vinyl is away (playing / being picked)
     this.hot = false;
     this.art = item.art;
@@ -645,6 +645,43 @@ function heldUnder(core, pointer, camera) {
   return _hc.ray.intersectBox(_hb, _wp) ? core.hovered : -1;
 }
 
+// A hovered record's name tag must stay readable: on low shelves it would hang past the bottom of the
+// window (and the zoom pushes it further), so the record rises along the camera's up just enough to
+// bring the tag's lowest corner above the frame's painted edge and the tucked suitcase. It runs after
+// layout(), so every rack gets it. The rise only ever grows while a record stays hovered, so it can't
+// wobble as the camera settles. Hover is picked from rest spots (and the camera's pivot is fixed per
+// record), so rising moves neither the hover nor the camera.
+const TAG_FLOOR = -0.82, FIT_FROM = 0.9, FIT_RATE = 9; // NDC y; lift it starts at; ease
+const _fUp = new THREE.Vector3(), _fA = new THREE.Vector3(), _fB = new THREE.Vector3(), _fV = new THREE.Vector3();
+function keepTagInFrame(core, camera, dt) {
+  camera.updateWorldMatrix(true, false);
+  _fUp.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+  const k = 1 - Math.exp(-dt * FIT_RATE), hov = core.sleeves[core.hovered], tag = core.tag.mesh;
+  for (const s of core.sleeves) {
+    if (s !== hov) s.fitTo = 0;
+    s.fit += (s.fitTo - s.fit) * k;
+    // sinks with the record's own lift, so it goes home along its normal path
+    const f = s.fit * Math.min(1, Math.max(0, s.lift) / FIT_FROM), parent = s.mesh.parent;
+    if (f < 1e-4 || !parent) continue;
+    s.mesh.getWorldPosition(_fA);
+    _fB.copy(_fA).addScaledVector(_fUp, f);
+    parent.worldToLocal(_fA);
+    parent.worldToLocal(_fB);
+    s.mesh.position.add(_fB.sub(_fA));
+  }
+  if (!hov || hov.lift < FIT_FROM || tag.parent !== hov.mesh) return;
+  tag.updateWorldMatrix(true, false);
+  if (!tag.geometry.boundingBox) tag.geometry.computeBoundingBox();
+  const bb = tag.geometry.boundingBox;
+  let need = 0;
+  for (const x of [bb.min.x, bb.max.x]) {
+    _fV.set(x, bb.min.y, 0).applyMatrix4(tag.matrixWorld).applyMatrix4(camera.matrixWorldInverse);
+    const depth = -_fV.z, ndc = (camera.projectionMatrix.elements[5] * _fV.y) / depth;
+    need = Math.max(need, ((TAG_FLOOR - ndc) * depth) / camera.projectionMatrix.elements[5]);
+  }
+  hov.fitTo = Math.max(hov.fitTo, hov.fit + need);
+}
+
 export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_ITEMS, sleeve = {}, tagOnSleeve = true } = {}) {
   const root = new THREE.Group();
   const core = {
@@ -727,6 +764,7 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         def.layout(core, dt, camera, want);
         core.sleeves.forEach((s) => { s.mesh.visible = s.appear > 0 && !s.hidden; });
         if (core.tag.mesh.parent) core.tag.mesh.scale.setScalar(0.6 + 0.4 * (core.sleeves[want]?.lift ?? 0));
+        keepTagInFrame(core, camera, dt);
       },
       // the item's art changed (repaired playlist cover): re-skin its sleeve(s) without re-laying out
       refreshArt(item) {

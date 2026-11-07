@@ -11,16 +11,16 @@ mkdirSync(out, { recursive: true });
 const port = Number(process.env.CADENCE_PORT) || 5247;
 const server = await createServer({ server: { port, host: '127.0.0.1', strictPort: true }, logLevel: 'error' });
 await server.listen();
-// CADENCE_GL=vulkan renders on the real GPU (much faster); the default is software, for machines without one
+// CADENCE_GL=vulkan renders on the real GPU (much faster; adding --enable-features=Vulkan garbles screenshots); the default is software, for machines without one
 const FAST = process.env.CADENCE_GL === 'vulkan';
-const GL = FAST ? ['--use-gl=angle', '--use-angle=vulkan', '--enable-features=Vulkan', '--ignore-gpu-blocklist'] : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
+const GL = FAST ? ['--use-gl=angle', '--use-angle=vulkan', '--ignore-gpu-blocklist'] : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
 const b = await chromium.launch({ args: GL });
 const W = 1170, H = 730, LIMIT = Math.round(((1 + 0.82) / 2) * H);
 let cut = 0;
 for (const at of stations) {
   const page = await b.newPage({ viewport: { width: W, height: H } });
   page.on('pageerror', (e) => console.log('[pageerror]', e.message));
-  await page.goto(`http://127.0.0.1:${port}/index.html?shelves=8&at=${at}&wc=${process.env.CADENCE_WC ?? 0}`);
+  await page.goto(`http://127.0.0.1:${port}/index.html?shelves=8&at=${at}&wc=${process.env.CADENCE_WC ?? 0}`, { timeout: 180000 });
   await page.waitForFunction(() => window.__cadenceDebug?.state.settled, null, { timeout: 240000 });
   // the rack is built after the walk-in (and may be rebuilt once while loading); its records drop in one by one
   const dropped = () => page.waitForFunction(() => { const r = window.__cadenceDebug.rack; return r?.root.visible && r.core.sleeves.length && r.core.sleeves.every((s) => s.hidden || (s.mesh.visible && s.drop < 0.01)); }, null, { timeout: 240000, polling: 500 });

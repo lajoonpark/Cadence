@@ -1,7 +1,8 @@
-// Is a hovered record's name tag inside the frame? Hovers the lowest records of each rack with
+// Is a hovered record's name tag inside the frame, with the record still under the cursor? Hovers the lowest records of each rack with
 // the mouse, waits for lift, zoom and rise to settle, prints where the tag's lowest corner lands.
 //   node scripts/tag-frame-check.mjs [out_dir] [stations=0,1,2,3,4,5,6,7] [records per rack=3]   (CADENCE_PORT)
-// y = px of the tag's lowest corner in a 730 px window; limit = the frame's safe line. rise = metres raised.
+// pose-off-cursor = the rack's own hover pose leaves the cursor (not counted; the rise never should).
+// Window is 730 px; tag top-bottom in px, line = the frame's safe line; rise = metres raised.
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { mkdirSync } from 'node:fs';
@@ -44,25 +45,25 @@ for (const at of stations) {
     await page.mouse.move(x, y);
     await page.mouse.move(x + 1, y);
     // a cursor stopped dead while the camera is still heading home can stay frozen: nudge it until it catches
-    let k = null;
+    let k = null, lastX = x;
     for (let t = 0; t < 12 && k === null; t++) {
-      await page.mouse.move(x + (t % 2 ? 6 : -6), y);
+      lastX = x + (t % 2 ? 6 : -6);
+      await page.mouse.move(lastX, y);
       k = await page.waitForFunction(() => { const c = window.__cadenceDebug.rack.core; return c.hovered >= 0 && c.sleeves[c.hovered].lift > 0.97 ? c.hovered : false; }, null, { timeout: 10000, polling: 200 }).then((h) => h.jsonValue()).catch(() => null);
     }
     if (k === null) { console.log(`st${at} at ${x | 0},${y | 0}: no hover`, await page.evaluate(() => { const c = window.__cadenceDebug.rack.core; return { hovered: c.hovered, lift: c.sleeves[c.hovered]?.lift }; })); continue; }
-    const measure = () => page.evaluate((k) => {
-      const d = window.__cadenceDebug, cam = d.camera, core = d.rack.core, tag = core.tag.mesh, s = core.sleeves[k];
+    const measure = () => page.evaluate(({ k, mx, my }) => {
+      const d = window.__cadenceDebug, cam = d.camera, core = d.rack.core, t = core.tag, tag = t.mesh, s = core.sleeves[k];
       cam.updateMatrixWorld();
       tag.updateWorldMatrix(true, false);
-      tag.geometry.computeBoundingBox();
-      const bb = tag.geometry.boundingBox;
-      let y = -1e9;
-      for (const c of [0, 1]) {
-        const v = cam.position.clone().set(c ? bb.max.x : bb.min.x, bb.min.y, 0).applyMatrix4(tag.matrixWorld).project(cam);
-        y = Math.max(y, (1 - v.y) / 2 * innerHeight);
-      }
-      return { y: Math.round(y), rise: s.fit ?? 0, parent: tag.parent === s.mesh, shown: tag.visible, onCam: s.mesh.getWorldPosition(cam.position.clone()).distanceTo(cam.getWorldPosition(cam.position.clone())).toFixed(2), hovered: core.hovered };
-    }, k);
+      const px = (obj, x, y) => { const v = cam.position.clone().set(x, y, 0).applyMatrix4(obj.matrixWorld).project(cam); return [(v.x + 1) / 2 * innerWidth, (1 - v.y) / 2 * innerHeight]; };
+      const cardH = t.lines > 1 ? t.h2 : t.h;
+      const corners = [-1, 1].flatMap((c) => [px(tag, c * t.w / 2, t.h / 2), px(tag, c * t.w / 2, t.h / 2 - cardH)]);
+      const rec = [-1, 1].flatMap((c) => [-1, 1].map((e) => px(s.mesh, c * s.size / 2, e * s.size / 2)));
+      const xs = rec.map((p) => p[0]), ys = rec.map((p) => p[1]);
+      return { y: Math.round(Math.max(...corners.map((p) => p[1]))), top: Math.round(Math.min(...corners.map((p) => p[1]))), recBottom: Math.round(Math.max(...ys)),
+        on: mx >= Math.min(...xs) && mx <= Math.max(...xs) && my >= Math.min(...ys) && my <= Math.max(...ys), rise: s.fit ?? 0, flip: !!core.tagFlip, hovered: core.hovered };
+    }, { k, mx: lastX, my: y });
     // zoom and rise take many slow frames here: measure once the tag has stopped moving
     let r = await measure(), last;
     for (let t = 0; t < 15; t++) {
@@ -70,13 +71,14 @@ for (const at of stations) {
       last = r; r = await measure();
       if (Math.abs(r.y - last.y) <= 1 && t >= 1) break;
     }
-    if (r.y > LIMIT + 2 || r.y < 0) cut++;
-    console.log(`st${at} #${k}: tag bottom y=${r.y} limit=${LIMIT} rise=${r.rise.toFixed(3)} dist=${r.onCam} hovered=${r.hovered} ${r.y > LIMIT + 2 ? 'CUT' : r.y < 0 ? 'ABOVE?' : 'ok'}`);
-    if (at === stations[0] || r.y > LIMIT + 2 || r.y < 0 || r.rise > 0.05) await page.screenshot({ path: `${out}/st${at}-${k}.jpg`, type: 'jpeg', quality: 80, timeout: 240000 }).catch(() => {});
+    const bad = r.y > LIMIT + 2 ? 'CUT' : r.top < 0 ? 'ABOVE' : !r.on && r.rise > 0.005 ? 'RISE-OFF-CURSOR' : r.recBottom > H ? 'RECORD-CUT' : 'ok';
+    if (bad !== 'ok') cut++;
+    console.log(`st${at} #${k}: tag ${r.top}-${r.y} (line ${LIMIT}) ${r.flip ? 'above' : 'below'} record bottom ${r.recBottom} cursor y ${y | 0} rise=${r.rise.toFixed(3)} ${r.on ? '' : 'pose-off-cursor '}${bad}`);
+    if (bad !== 'ok' || r.flip) await page.screenshot({ path: `${out}/st${at}-${k}.jpg`, type: 'jpeg', quality: 80, timeout: 240000 }).catch(() => {});
   }
   await page.close();
 }
-console.log(`records past the line: ${cut}`);
+console.log(`records with a problem: ${cut}`);
 await b.close();
 await server.close();
 process.exit(0);

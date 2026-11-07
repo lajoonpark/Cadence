@@ -589,6 +589,7 @@ function drawTag(g, item, seed, wrap) {
   const sub = item.subtitle || '';
   do { g.font = `${s}px ${FONT}`; s -= 2; } while (g.measureText(sub).width > w - 72 && s > 36);
   g.fillText(ellipsize(g, sub, w - 72), 36, h * (lines.length > 1 ? 0.8 : 0.76));
+  return lines.length;
 }
 
 // w, h: the size of a one-line card (m); a two-line card grows downward, away from the record above it.
@@ -603,11 +604,11 @@ export function createTag({ w = 0.34, h = 0.1, wrap = true } = {}) {
   const mesh = new THREE.Mesh(geo, crisp({ map: tex, alphaTest: 0.4 }));
   mesh.visible = false;
   let seq = 0;
-  const tag = { mesh, ready: Promise.resolve() };
+  const tag = { mesh, ready: Promise.resolve(), w, h, h2, lines: 1 };
   tag.show = (item, seed = 3) => {
     const my = ++seq;
     mesh.visible = true;
-    tag.ready = fontReady.then(() => { if (my === seq) { drawTag(g, item, seed, wrap); tex.needsUpdate = true; } });
+    tag.ready = fontReady.then(() => { if (my === seq) { tag.lines = drawTag(g, item, seed, wrap); tex.needsUpdate = true; } });
   };
   tag.hide = () => { seq++; mesh.visible = false; mesh.removeFromParent(); };
   return tag;
@@ -645,18 +646,20 @@ function heldUnder(core, pointer, camera) {
   return _hc.ray.intersectBox(_hb, _wp) ? core.hovered : -1;
 }
 
-// A hovered record's name tag must stay readable: on low shelves it would hang past the bottom of the
-// window (and the zoom pushes it further), so the record rises along the camera's up just enough to
-// bring the tag's lowest corner above the frame's painted edge and the tucked suitcase. It runs after
-// layout(), so every rack gets it. The rise only ever grows while a record stays hovered, so it can't
-// wobble as the camera settles. Hover is picked from rest spots (and the camera's pivot is fixed per
-// record), so rising moves neither the hover nor the camera.
-const TAG_FLOOR = -0.82, FIT_FROM = 0.9, FIT_RATE = 9; // NDC y; lift it starts at; ease
+// A hovered record's name tag must stay readable, and the record must stay under the cursor (you should
+// be able to press it without moving). A tag that would hang past the bottom of the window (the zoom
+// pushes it further) sits above the record instead; that is decided once per hover, as the record comes
+// up. The record may also rise a little, to bring its tag (or, with the tag above, its own bottom edge)
+// inside the frame, but never so far that it leaves the cursor. It runs after layout(), so every rack
+// gets it. Hover is picked from rest spots and the camera's pivot is fixed per record, so rising moves
+// neither of them.
+const TAG_FLOOR = -0.82, RECORD_FLOOR = -0.9, CURSOR_MARGIN = 0.05; // NDC y: painted edge + tucked suitcase; record's bottom; cursor inside it
+const FIT_FROM = 0.9, FIT_RATE = 9, DECIDE_AT = 0.6, HOVER_DIST = 1.35; // lift; ease; lift; metres from the camera once zoomed (about)
 const _fUp = new THREE.Vector3(), _fA = new THREE.Vector3(), _fB = new THREE.Vector3(), _fV = new THREE.Vector3();
-function keepTagInFrame(core, camera, dt) {
+function keepTagInFrame(core, camera, dt, pointer) {
   camera.updateWorldMatrix(true, false);
   _fUp.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
-  const k = 1 - Math.exp(-dt * FIT_RATE), hov = core.sleeves[core.hovered], tag = core.tag.mesh;
+  const k = 1 - Math.exp(-dt * FIT_RATE), hov = core.sleeves[core.hovered], t = core.tag, tag = t.mesh;
   for (const s of core.sleeves) {
     if (s !== hov) s.fitTo = 0;
     s.fit += (s.fitTo - s.fit) * k;
@@ -669,17 +672,35 @@ function keepTagInFrame(core, camera, dt) {
     parent.worldToLocal(_fB);
     s.mesh.position.add(_fB.sub(_fA));
   }
-  if (!hov || hov.lift < FIT_FROM || tag.parent !== hov.mesh) return;
-  tag.updateWorldMatrix(true, false);
-  if (!tag.geometry.boundingBox) tag.geometry.computeBoundingBox();
-  const bb = tag.geometry.boundingBox;
-  let need = 0;
-  for (const x of [bb.min.x, bb.max.x]) {
-    _fV.set(x, bb.min.y, 0).applyMatrix4(tag.matrixWorld).applyMatrix4(camera.matrixWorldInverse);
-    const depth = -_fV.z, ndc = (camera.projectionMatrix.elements[5] * _fV.y) / depth;
-    need = Math.max(need, ((TAG_FLOOR - ndc) * depth) / camera.projectionMatrix.elements[5]);
+  if (!hov || tag.parent !== hov.mesh) return;
+  const p5 = camera.projectionMatrix.elements[5];
+  // a point on the record in view space -> _fV; returns its NDC y
+  const ndcY = (obj, x, y) => {
+    _fV.set(x, y, 0).applyMatrix4(obj.matrixWorld).applyMatrix4(camera.matrixWorldInverse);
+    return (p5 * _fV.y) / -_fV.z;
+  };
+  const cardH = t.lines > 1 ? t.h2 : t.h;
+  if (core.tagFlip === null) {
+    if (hov.lift < DECIDE_AT) { tag.scale.setScalar(1e-3); return; } // not shown until its side is settled
+    hov.mesh.updateWorldMatrix(true, false);
+    core.tagBaseY = tag.position.y;
+    const centre = ndcY(hov.mesh, 0, 0), low = core.tagBaseY + t.h / 2 - cardH;
+    core.tagFlip = core.tagBaseY < 0 && centre + (low * p5) / Math.min(-_fV.z, HOVER_DIST) < TAG_FLOOR;
   }
-  hov.fitTo = Math.max(hov.fitTo, hov.fit + need);
+  // mirrored about the record's middle, so it overlaps the top edge as much as it did the bottom one
+  if (core.tagFlip) tag.position.y = -core.tagBaseY + cardH - t.h;
+  if (hov.lift < FIT_FROM) return;
+  tag.updateWorldMatrix(true, false);
+  const pxToM = (ndc) => (ndc * -_fV.z) / p5;
+  let need = 0;
+  if (core.tagFlip) need = pxToM(RECORD_FLOOR - ndcY(hov.mesh, 0, -hov.size / 2));
+  else {
+    for (const x of [-t.w / 2, t.w / 2]) need = Math.max(need, pxToM(TAG_FLOOR - ndcY(tag, x, t.h / 2 - cardH)));
+  }
+  // as far as the cursor allows: the record's bottom edge stays below it
+  const bottom = ndcY(hov.mesh, 0, -hov.size / 2);
+  const room = pointer ? pxToM(pointer.y - CURSOR_MARGIN - bottom) : 0;
+  hov.fitTo = Math.max(0, Math.min(Math.max(hov.fitTo, hov.fit + need), hov.fit + room));
 }
 
 export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_ITEMS, sleeve = {}, tagOnSleeve = true } = {}) {
@@ -692,6 +713,8 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
     sign: sign ? createSign(sign) : null,
     tag: createTag(tag),
     hovered: -1,
+    tagFlip: null,                 // is the tag above the record? null: not decided yet this hover
+    tagBaseY: 0,
     control: -1,
     shelf: null,
     camLocal: new THREE.Vector3(), // the camera in the root's space, refreshed before layout()
@@ -701,7 +724,14 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
 
   let forced = null;
 
+  // the tag goes back under the record (a new hover picks its side again)
+  function tagHome() {
+    if (core.tagFlip) core.tag.mesh.position.y = core.tagBaseY;
+    core.tagFlip = null;
+  }
+
   function clear() {
+    tagHome();
     for (const s of core.sleeves) s.dispose();
     core.sleeves = [];
     core.picker.clear();
@@ -710,6 +740,7 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
 
   function setHovered(i) {
     if (i === core.hovered) return;
+    tagHome();
     core.hovered = i;
     const s = core.sleeves[i];
     if (!s) { core.tag.hide(); return; }
@@ -764,7 +795,7 @@ export function createRackCore({ onPick, sign = null, tag = {}, maxItems = MAX_I
         def.layout(core, dt, camera, want);
         core.sleeves.forEach((s) => { s.mesh.visible = s.appear > 0 && !s.hidden; });
         if (core.tag.mesh.parent) core.tag.mesh.scale.setScalar(0.6 + 0.4 * (core.sleeves[want]?.lift ?? 0));
-        keepTagInFrame(core, camera, dt);
+        keepTagInFrame(core, camera, dt, pointer);
       },
       // the item's art changed (repaired playlist cover): re-skin its sleeve(s) without re-laying out
       refreshArt(item) {

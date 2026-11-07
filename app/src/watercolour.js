@@ -159,6 +159,7 @@ uniform sampler2D tPaper;
 uniform vec2 resolution;
 uniform vec2 paperOffset;
 uniform float seed;
+uniform float borderSeed; // keeps boiling in brush mode, where seed stays 0
 uniform float near;
 uniform float far;
 uniform sampler2D tWash;   // the bled washes, only with WASH
@@ -318,7 +319,7 @@ void main() {
 
   // 6. unpainted ragged border, like a painting that stops short of the sheet edge
   vec2 e = min(vUv, 1.0 - vUv) * vec2(aspect, 1.0);
-  float border = min(e.x, e.y) + (fbm(q * 9.0 + seed * 0.3) - 0.5) * 0.05;
+  float border = min(e.x, e.y) + (fbm(q * 9.0 + borderSeed * 0.3) - 0.5) * 0.05;
 #ifdef CARD
   border -= 0.05; // a wider paper margin: the sheet itself is the card
 #endif
@@ -378,6 +379,7 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
       resolution: { value: size.clone() },
       paperOffset: { value: new THREE.Vector2() },
       seed: { value: 0 },
+      borderSeed: { value: 0 },
       near: { value: 0.1 },
       far: { value: 100 },
       tWash: { value: null },
@@ -623,7 +625,8 @@ void main() {
     // sync (profiling only): called after each step with its name, to time it (see __cadenceDebug.profile)
     render(scene, camera, t, overlay, sync) {
       const u = material.uniforms;
-      u.seed.value = brush ? 0 : (Math.floor(t * BOIL_FPS) % 64) * 1.37; // dry paint does not boil
+      u.borderSeed.value = (Math.floor(t * BOIL_FPS) % 64) * 1.37;
+      u.seed.value = brush ? 0 : u.borderSeed.value; // dry paint does not boil, but the sheet's ragged border does
       u.near.value = camera.near;
       u.far.value = camera.far;
       // Pan the paper with the camera's turn so cursor tilt moves scene and sheet together

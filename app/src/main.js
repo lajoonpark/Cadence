@@ -693,7 +693,7 @@ if (shotMode) {
       renderer,
       step: (now) => { tickFps(); frame((now - start) / 1000); watchCamera(); },
       busy: () => nav.intro || !nav.settled || suitcase.flying || suitcase.machine.active || suitcase.over || suitcase.suitcase.lidMoving,
-      // a spinning record on screen wants a smooth turn; otherwise only lanterns move (Brush strokes do not boil; the older looks do)
+      // a spinning record on screen wants a smooth turn; otherwise only lanterns and the boil move (Brush strokes: only the ragged border boils; the older looks: all of it)
       idleFps: () => (player?.playerState === 1 && suitcase.tucked < 0.5 ? 30 : 12),
     });
     pacer.start();

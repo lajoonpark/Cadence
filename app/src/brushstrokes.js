@@ -425,10 +425,11 @@ export function createBrushStrokes(renderer, refTexture, depthTexture) {
           if (part.count >= layer.cap) continue;
           const octave = Math.min(MAX_OCTAVE, Math.max(0, Math.round(Math.log2((layer.reach * d) / BASE_LENGTH))));
           const len = BASE_LENGTH * 2 ** octave;
-          // one stroke per place in the rows on this surface; every other row starts half a stroke along
+          // one stroke per place in the rows on this surface. Each row starts somewhere of its own: evenly
+          // staggered rows line their stroke ends up into a false second diagonal, a zigzag.
           const rowH = len * layer.rowGap;
           const row = Math.floor(p.dot(across) / rowH);
-          const col = Math.floor(p.dot(hand) / (len * layer.colGap) + (row & 1) * 0.5);
+          const col = Math.floor(p.dot(hand) / (len * layer.colGap) + ((row * 0.618) % 1 + 1) % 1);
           const depth = Math.floor(p.dot(n) / Math.max(0.15, rowH));
           const key = (row + 16384) * 2 ** 33 + (col + 16384) * 2 ** 18 + (depth + 2048) * 2 ** 6 + octave * 8 + FACES(n);
           if (taken.has(key)) continue;
@@ -479,7 +480,9 @@ export function createBrushStrokes(renderer, refTexture, depthTexture) {
           const wid = Math.max(0.006, Math.min(len * layer.widthRatio, (sh - sl) * 1.1));
           const fitted = Math.max(wid * 1.6, Math.min(len, (ah - al) * 1.1));
           const slide = (lo, hi, size) => (size >= hi - lo ? (lo + hi) / 2 : Math.max(lo + size / 2, Math.min(hi - size / 2, 0)));
-          centre.copy(p).addScaledVector(t, slide(al, ah, fitted)).addScaledVector(side, slide(sl, sh, wid));
+          // and no two land quite evenly along the row (the slide still keeps both ends on the shape)
+          const wander = (r() - 0.5) * len * layer.colGap * 0.8;
+          centre.copy(p).addScaledVector(t, slide(al - wander, ah - wander, fitted) + wander).addScaledVector(side, slide(sl, sh, wid));
           const i = part.count++;
           buffers.aPos.setXYZW(i, centre.x, centre.y, centre.z, len);
           buffers.aShape.setXY(i, fitted, wid);

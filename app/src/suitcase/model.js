@@ -8,7 +8,7 @@ import { toon, crisp } from '../materials.js';
 import { LAYOUT as L, TONEARM, controlLayout } from '../tonearm.js';
 import { MIN_ANGLE, SWEEP } from '../knob.js';
 import {
-  COL, leatherTexture, liningTexture, clothTexture, vinylTexture, fallbackLabel, sheenTexture,
+  COL, leatherTexture, liningTexture, deckTexture, clothTexture, strokesTexture, vinylTexture, fallbackLabel, sheenTexture,
   shadowTexture, paperPatchTexture, glyphTexture, washBlend,
 } from './paint.js';
 
@@ -31,6 +31,26 @@ export function painted(color, extra) {
     m.customProgramCacheKey = () => 'wc-blotch-case';
   }
   return m;
+}
+
+// A part with brush strokes in its map. Its geometry gets brushUV when it is added to the case.
+const brushed = (color, map) => {
+  const m = painted(color, { map });
+  m.userData.brushed = true;
+  return m;
+};
+
+// Texture coordinates in the case's own units, each face projected flat, so that a stroke keeps its size
+// and its direction on every part, long or short (the geometry's own stretch one image over each face).
+function brushUV(geo) {
+  const p = geo.getAttribute('position'), n = geo.getAttribute('normal');
+  const uv = new Float32Array(p.count * 2);
+  for (let i = 0; i < p.count; i++) {
+    const ax = Math.abs(n.getX(i)), ay = Math.abs(n.getY(i)), az = Math.abs(n.getZ(i));
+    uv[i * 2] = ay >= ax && ay >= az ? p.getX(i) : ax >= az ? -p.getZ(i) * Math.sign(n.getX(i)) : p.getX(i) * Math.sign(n.getZ(i));
+    uv[i * 2 + 1] = ay >= ax && ay >= az ? -p.getZ(i) : p.getY(i);
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
 }
 
 const rbox = (w, h, d, r = 0.04) => new RoundedBoxGeometry(w, h, d, 2, r);
@@ -84,21 +104,22 @@ export function buildSuitcase({ recordKit, ground = 'shadow', big = false }) {
   tilt.position.y = 0.6;
   caseRoot.position.y = -0.6;
 
-  const leatherMap = leatherTexture();
+  const strokes = strokesTexture();
   const mats = {
-    leather: painted('#ffffff', { map: leatherMap }),
-    welt: painted(COL.leatherDark),
-    lining: painted('#ffffff', { map: liningTexture() }),
-    brass: painted(COL.brass),
-    deck: painted(COL.deck),
-    platter: painted(COL.platter),
-    dark: painted('#5d4f50'),
-    cloth: painted('#ffffff', { map: clothTexture() }),
-    steel: painted('#9a8d78'),
-    cart: painted(COL.hot),
-    handle: painted('#7e4c2c'),
+    leather: brushed('#ffffff', leatherTexture()),
+    welt: brushed(COL.leatherDark, strokes),
+    lining: brushed('#ffffff', liningTexture()),
+    brass: brushed(COL.brass, strokes),
+    deck: brushed('#ffffff', deckTexture()),
+    platter: brushed(COL.platter, strokes),
+    dark: brushed('#5d4f50', strokes),
+    cloth: brushed('#ffffff', clothTexture()),
+    steel: brushed('#9a8d78', strokes),
+    cart: brushed(COL.hot, strokes),
+    handle: brushed('#7e4c2c', strokes),
   };
   const add = (parent, geo, mat, x = 0, y = 0, z = 0) => {
+    if ([mat].flat()[0].userData.brushed) brushUV(geo);
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
     parent.add(m);
@@ -205,7 +226,7 @@ export function buildSuitcase({ recordKit, ground = 'shadow', big = false }) {
   const knob = new THREE.Group();
   knob.position.set(k.x, deckTop + 0.12, k.z);
   caseRoot.add(knob);
-  const knobMat = painted(COL.ink), knobTopMat = painted('#4c5282'), pointerMat = painted(COL.paper);
+  const knobMat = brushed(COL.ink, strokes), knobTopMat = brushed('#4c5282', strokes), pointerMat = painted(COL.paper);
   add(knob, cyl(kr, 0.18, 32), knobMat);
   add(knob, cyl(kr - 0.06, 0.014, 32), knobTopMat, 0, 0.094, 0);
   add(knob, new THREE.BoxGeometry(0.06, 0.02, 0.2), pointerMat, 0, 0.105, -(kr - 0.14));
@@ -219,11 +240,11 @@ export function buildSuitcase({ recordKit, ground = 'shadow', big = false }) {
     const grp = new THREE.Group();
     grp.position.set(b.x, deckTop, b.z);
     caseRoot.add(grp);
-    const ringMat = painted(COL.brass);
+    const ringMat = brushed(COL.brass, strokes);
     add(grp, cyl(b.radius + 0.04, 0.034, 24), ringMat, 0, 0.017, 0);
     const cap = new THREE.Group();
     grp.add(cap);
-    const capMat = painted(COL.ink);
+    const capMat = brushed(COL.ink, strokes);
     add(cap, cyl(b.radius, 0.08, 24), capMat, 0, 0.045, 0);
     const glyphMat = crisp({ map: glyphs[initial[name]], alphaTest: 0.5 });
     const glyph = add(cap, new THREE.PlaneGeometry(2 * b.radius * 1.15, 2 * b.radius * 1.15).rotateX(-Math.PI / 2), glyphMat, 0, 0.0865, 0);

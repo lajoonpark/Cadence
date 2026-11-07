@@ -20,7 +20,8 @@ page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 const query = process.env.CADENCE_QUERY ? `&${process.env.CADENCE_QUERY}` : '';
 // CADENCE_PAGE=lab.html (or mini.html...) shoots another page of the app instead of the shop
 const pageName = process.env.CADENCE_PAGE || '';
-await page.goto(`http://127.0.0.1:${port}/${pageName}?shot${query}`);
+// brush mode places its strokes during load, which takes a while without a GPU
+await page.goto(`http://127.0.0.1:${port}/${pageName}?shot${query}`, { timeout: 180000 });
 await page.waitForFunction('window.__ready === true', null, { timeout: 60000 });
 for (const t of (times.length ? times : ['0', '3', '5', '8'])) {
   await page.evaluate((s) => window.__seek(s), Number(t));

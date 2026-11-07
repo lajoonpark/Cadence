@@ -1,6 +1,6 @@
-// Search bar. Opens with Option+Cmd+S (macOS) or Ctrl+Alt+S: a strip of torn paper inside an indigo
-// brush stroke, top centre, with the results dropping down under it as paper slips (the same paper
-// as the now-playing tag in controls.js), the chosen one painted over in terracotta.
+// Search bar. Opens with Option+Cmd+S (macOS) or Ctrl+Alt+S: a swipe of cream paint on a swipe of indigo,
+// top centre, with the results brushed in under it row by row, the chosen one painted over in terracotta.
+// All of it is laid with the shop's brush (brushpaint.js).
 //
 //   const search = createSearch({ music, onPlay, suggest });   // music.search(q) -> Promise<items>
 //   search.open() / close() / toggle() / isOpen()
@@ -17,7 +17,8 @@
 // Shot hooks (location.search): ?search=lemon opens it with that query, ?searchhl=N highlights slip N.
 import { rng } from './rand.js';
 import { FONT } from './style.js';
-import { INK, PAPER, brushStroke } from './controls.js';
+import { INK, PAPER } from './controls.js';
+import { brushBand, TONES } from './brushpaint.js';
 import { paintedCoverURL } from './coverpaint.js';
 
 const HOT = '#b4503a';           // terracotta on the chosen slip
@@ -25,41 +26,43 @@ const DEBOUNCE = 250;
 const MAX_SLIPS = 20;          // the slips scroll
 const BAR_H = 88;
 const SLIP_H = 66;
+const SLIP_COATS = 5, HOT_COATS = 3;   // rows take turns with a few painted swipes: they are slow to paint, quick to reuse
+const WIPE_HIDE = 'inset(-14px 100% -14px -14px)', WIPE_SHOW = 'inset(-14px -14px -14px -14px)';   // paint arrives from the left, as the brush travels
 
 const CSS = `
 .cs { position: fixed; top: 3.2vh; left: 50%; width: min(640px, 92vw); z-index: 60; transform: translateX(-50%);
   pointer-events: none; visibility: hidden; font-family: ${FONT}; user-select: none; }
 .cs.show { pointer-events: auto; visibility: visible; }
-.cs-bar { position: relative; height: ${BAR_H}px; opacity: 0; transform: translateY(-26px) rotate(-1.2deg) scale(.97);
-  transform-origin: 20% 0; transition: opacity .28s ease, transform .45s cubic-bezier(.2,1.5,.4,1); background-size: 100% 100%; }
-.cs.show .cs-bar { opacity: 1; transform: rotate(-.6deg); }
-.cs-paper { position: absolute; left: 42px; right: 70px; top: 20px; bottom: 20px; background: ${PAPER}; display: flex; align-items: center;
-  padding: 0 18px 0 14px; gap: 8px; }
+.cs-bar { position: relative; height: ${BAR_H}px; opacity: 0; transform: rotate(-1.2deg); clip-path: ${WIPE_HIDE};
+  transform-origin: 20% 0; transition: opacity .12s ease, transform .4s ease, clip-path .36s cubic-bezier(.3,.7,.3,1); background-size: 100% 100%; }
+.cs.show .cs-bar { opacity: 1; transform: rotate(-.6deg); clip-path: ${WIPE_SHOW}; }
+.cs-paper { position: absolute; left: 32px; right: 50px; top: 16px; bottom: 16px; background-size: 100% 100%; display: flex; align-items: center;
+  padding: 0 26px 0 22px; gap: 8px; }
 .cs-paper svg { flex: none; width: 32px; height: 32px; margin-top: 2px; }
 .cs-input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: 38px/1 ${FONT}; color: #2b2436; padding: 6px 0 2px;
   caret-color: ${HOT}; letter-spacing: .01em; }
 .cs-input::placeholder { color: #a8957c; }
 .cs-input::selection { background: rgba(180,80,58,.28); }
-.cs-list { margin: -2px 0 0 6px; padding: 2px 12px 18px; width: calc(100% - 12px); box-sizing: border-box; list-style: none; transition: opacity .2s;
-  max-height: calc(100vh - 3.2vh - ${BAR_H}px - 16px); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+.cs-list { margin: -10px 0 0 6px; padding: 12px 12px 18px; width: calc(100% - 12px); box-sizing: border-box; list-style: none; transition: opacity .2s;
+  max-height: calc(100vh - 3.2vh - ${BAR_H}px - var(--cs-bottom, 16px)); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+  mask-image: linear-gradient(#000 calc(100% - 20px), transparent);
   scrollbar-width: thin; scrollbar-color: rgba(45,49,88,.45) transparent; }
 .cs-list::-webkit-scrollbar { width: 6px; } .cs-list::-webkit-scrollbar-thumb { background: rgba(45,49,88,.45); border-radius: 3px; }
 .cs-head { position: relative; display: inline-block; margin: 0 0 4px 22px; padding: 4px 26px 4px 18px; color: ${PAPER}; font-size: 26px;
   background-size: 100% 100%; background-image: var(--note); transform: rotate(-1.2deg); }
 .cs-head[hidden] { display: none; }
 .cs-list.stale { opacity: .55; }
-.cs-slipwrap { filter: drop-shadow(0 3px 3px rgba(50,35,25,.2)); margin-top: -1px; opacity: 0; transform: translateY(-14px) rotate(var(--r));
-  animation: cs-drop .38s cubic-bezier(.2,1.4,.4,1) forwards; animation-delay: calc(var(--i) * 38ms); cursor: pointer; }
+.cs-slipwrap { margin-top: -7px; transform: rotate(var(--r)); clip-path: ${WIPE_HIDE};
+  animation: cs-wipe .3s cubic-bezier(.3,.7,.3,1) forwards; animation-delay: calc(var(--i) * 30ms); cursor: pointer; }
 .cs:not(.show) .cs-slipwrap { animation: none; }
-@keyframes cs-drop { to { opacity: 1; transform: translateY(0) rotate(var(--r)); } }
-.cs-slip { position: relative; height: ${SLIP_H}px; background: #f4ead6; display: flex; align-items: center; gap: 14px;
-  padding: 0 24px 0 16px; color: #2b2436; transition: color .15s; }
-.cs-hl { position: absolute; inset: -2px -6px; background-size: 100% 100%; opacity: 0; transition: opacity .18s; pointer-events: none; }
+@keyframes cs-wipe { to { clip-path: ${WIPE_SHOW}; } }
+.cs-slip { position: relative; height: ${SLIP_H}px; background-size: 100% 100%; display: flex; align-items: center; gap: 14px;
+  padding: 0 34px 0 22px; color: #2b2436; transition: color .15s; }
+.cs-hl { position: absolute; inset: 0; background-size: 100% 100%; opacity: 0; transition: opacity .18s; pointer-events: none; }
 .cs-slipwrap.on .cs-hl { opacity: 1; }
 .cs-slipwrap.on .cs-slip { color: ${PAPER}; }
 .cs-slipwrap.on .cs-a, .cs-slipwrap.on .cs-d { color: rgba(251,245,232,.85); }
-.cs-cover { position: relative; flex: none; width: 46px; height: 46px; padding: 2px; background: ${PAPER}; transform: rotate(-2.5deg);
-  box-shadow: 0 0 0 1px rgba(45,49,88,.25); }
+.cs-cover { position: relative; flex: none; width: 46px; height: 46px; transform: rotate(-2.5deg); }
 .cs-cover img, .cs-cover i { display: block; width: 100%; height: 100%; object-fit: cover; background: #d9cbb2; }
 .cs-txt { position: relative; flex: 1; min-width: 0; line-height: 1; }
 .cs-t, .cs-a { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -73,23 +76,10 @@ const CSS = `
 @keyframes cs-dab { 0%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-4px); } }
 `;
 
-// A hand-torn paper outline: jittered points along all four edges, as a CSS polygon.
-function torn(seed, amp = 3) {
-  const r = rng(seed);
-  const j = () => (r() * amp).toFixed(1);
-  const pts = [];
-  const n = 12;
-  for (let i = 0; i <= n; i++) pts.push(`${((i / n) * 100).toFixed(1)}% ${j()}px`);
-  for (let i = 1; i < 4; i++) pts.push(`calc(100% - ${j()}px) ${((i / 4) * 100).toFixed(1)}%`);
-  for (let i = n; i >= 0; i--) pts.push(`${((i / n) * 100).toFixed(1)}% calc(100% - ${j()}px)`);
-  for (let i = 3; i > 0; i--) pts.push(`${j()}px ${((i / 4) * 100).toFixed(1)}%`);
-  return `polygon(${pts.join(',')})`;
-}
-
 const mmss = (s) => (s ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '');
 
 // A tiny brushed magnifying glass, in indigo.
-const GLASS = `<svg viewBox="0 0 32 32" fill="none" stroke="${INK}" stroke-linecap="round"><circle cx="13" cy="13" r="8.5" stroke-width="3.2"/><path d="M19.5 19.5 L28 28" stroke-width="4.2"/><path d="M9 11 Q10.5 8 13.5 7.5" stroke-width="1.6" opacity=".5"/></svg>`;
+const GLASS = `<svg viewBox="0 0 32 32" fill="none" stroke="${INK}" stroke-linecap="round"><filter id="cs-rough" x="-20%" y="-20%" width="140%" height="140%"><feTurbulence type="fractalNoise" baseFrequency=".38" numOctaves="2" seed="4"/><feDisplacementMap in="SourceGraphic" scale="2.2"/></filter><g filter="url(#cs-rough)"><circle cx="13" cy="13" r="8.5" stroke-width="3.2"/><path d="M19.5 19.5 L28 28" stroke-width="4.2"/><path d="M9 11 Q10.5 8 13.5 7.5" stroke-width="1.6" opacity=".5"/></g></svg>`;
 
 let openCount = 0;
 export const searchOpen = () => openCount > 0;
@@ -108,18 +98,19 @@ export function createSearch({ music, onPlay, suggest = null }) {
   const input = root.querySelector('.cs-input');
   const list = root.querySelector('.cs-list');
   const head = root.querySelector('.cs-head');
-  paper.style.clipPath = torn(5, 4);
 
-  // Brush strokes are drawn to the final size once the brush font is in (sizes follow the window).
-  let strokes = {};
+  // The paint is drawn to the final size once the brush font is in (sizes follow the window).
+  let paintedW = 0;
   const paintStrokes = () => {
-    const w = Math.ceil(bar.getBoundingClientRect().width || 0);
-    if (!w || strokes.w === w) return;
+    const w = Math.ceil(root.getBoundingClientRect().width || 0);
+    if (!w || paintedW === w) return;
+    paintedW = w;
     const slipW = Math.ceil((list.getBoundingClientRect().width || w - 12) - 24);
-    strokes = { w, bar: brushStroke(w, BAR_H, INK, 21), hl: brushStroke(slipW + 12, SLIP_H + 4, HOT, 33), note: brushStroke(slipW - 10, SLIP_H - 6, INK, 47) };
-    bar.style.backgroundImage = `url(${strokes.bar})`;
-    root.style.setProperty('--hl', `url(${strokes.hl})`);
-    root.style.setProperty('--note', `url(${strokes.note})`);
+    bar.style.backgroundImage = `url(${brushBand(w, BAR_H, { tones: TONES.ink, seed: 21, rows: 3 })})`;
+    paper.style.backgroundImage = `url(${brushBand(paper.offsetWidth || w - 82, paper.offsetHeight || BAR_H - 32, { tones: TONES.paper, seed: 5, rows: 2 })})`;
+    for (let i = 0; i < SLIP_COATS; i++) root.style.setProperty(`--slip${i}`, `url(${brushBand(slipW, SLIP_H, { tones: TONES.paper, seed: 200 + i * 13, rows: 2 })})`);
+    for (let i = 0; i < HOT_COATS; i++) root.style.setProperty(`--hl${i}`, `url(${brushBand(slipW, SLIP_H, { tones: TONES.hot, seed: 33 + i * 7, rows: 2 })})`);
+    root.style.setProperty('--note', `url(${brushBand(slipW - 10, SLIP_H - 6, { tones: TONES.ink, seed: 47, rows: 2 })})`);
   };
   const fontReady = (document.fonts?.load(`38px ${FONT}`) ?? Promise.resolve()).then(paintStrokes, paintStrokes);
   new ResizeObserver(() => fontReady.then(paintStrokes)).observe(root);
@@ -164,8 +155,8 @@ export function createSearch({ music, onPlay, suggest = null }) {
       li.style.marginRight = `${Math.round(r() * 12)}px`;
       const slip = document.createElement('div');
       slip.className = 'cs-slip';
-      slip.style.clipPath = torn(200 + i * 13, 4.5);
-      slip.innerHTML = '<div class="cs-hl" style="background-image:var(--hl)"></div><div class="cs-cover"></div><div class="cs-txt"><div class="cs-t"></div><div class="cs-a"></div></div><div class="cs-d"></div>';
+      slip.style.backgroundImage = `var(--slip${i % SLIP_COATS})`;
+      slip.innerHTML = `<div class="cs-hl" style="background-image:var(--hl${i % HOT_COATS})"></div><div class="cs-cover"></div><div class="cs-txt"><div class="cs-t"></div><div class="cs-a"></div></div><div class="cs-d"></div>`;
       const cover = slip.querySelector('.cs-cover');
       if (item.art) {
         const img = new Image();

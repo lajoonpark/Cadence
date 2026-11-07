@@ -64,13 +64,13 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
 - **Volume**: on macOS the knob, scroll and ↑ ↓ set the Mac's own output volume (`electron/sysvolume.cjs`,
   osascript) and the player stays at 100%, so you can turn it up past where the Mac was. Elsewhere it
   is the player's volume.
-- **Search**: **⌥⌘S** (Ctrl+Alt+S on Windows/Linux) opens a search bar (`src/search.js`); songs drop
-  down as paper slips, arrows + Enter or a click plays one. A song from search has no sleeve, so a
+- **Search**: **⌥⌘S** (Ctrl+Alt+S on Windows/Linux) opens a search bar (`src/search.js`); songs are
+  brushed in row by row with the shop's brush (`src/brushpaint.js`), arrows + Enter or a click plays one. A song from search has no sleeve, so a
   little painted record machine pops up by the suitcase, whirs, spits the record out of its top onto
   the platter and pops away (`src/suitcase/machine.js`; `?machine=1.2` freezes it for screenshots).
 - **Settings**: the SETTINGS word (top right) or **⌘,** (Ctrl+, elsewhere) opens a paper card
   (`src/settings-panel.js`, stored by `src/settings.js` in localStorage, shared with the mini window).
-  *Painting* sets the watercolour strength: Faint / Light / Medium / Heavy (default Heavy). Faint is the
+  *Painting* sets the look: Faint / Light / Medium / Heavy watercolour, or Brush strokes (default), which repaints the world with strokes pinned to its surfaces: a full coat pulled in one direction, each stroke kept to its own surface, so the paint looks laid on by one hand, moves with the world and stays still when the camera does, while only the ragged border keeps boiling (`src/brushstrokes.js`; check with `scripts/still-check.mjs`). Faint is the
   old single pass; the others flatten shading into washes and let colour bleed (`LEVELS` in
   `src/watercolour.js`). `?wc=0..3` (or `CADENCE_QUERY="wc=2" npm run dev`) pins a level for screenshots.
   *Smoothness* caps the frame rate at 60 or 30 fps.

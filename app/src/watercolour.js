@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { paperTexture } from './paint.js';
 import { settings } from './settings.js';
+import { createBrushStrokes } from './brushstrokes.js';
 
 const BOIL_FPS = 8; // edges re-wobble at a hand-drawn frame rate instead of every frame
 
@@ -19,7 +20,14 @@ const LEVELS = [
   { radius: 3, bleed: 7, bleedMix: 0.55, bloom: 0.5, edge: 0.9, lift: 0.09 },
   { radius: 4, bleed: 12, bleedMix: 0.75, bloom: 0.8, edge: 0.8, lift: 0.12 },
   { radius: 6, bleed: 20, bleedMix: 0.9, bloom: 1.0, edge: 0.7, lift: 0.15 },
+  // Brush strokes (brushstrokes.js): the world is repainted stroke by stroke, then the strokes run into
+  // each other along the same bleed. radius/lift also set how the suitcase overlay is washed, as above.
+  { strokes: true, radius: 6, bleed: 10, bleedMix: 0.4, bloom: 1.0, edge: 0.55, lift: 0.05, grain: 0.4 },
 ];
+// Brush strokes in the small card window. It holds only the suitcase, whose strokes are in its textures
+// (suitcase/paint.js) and swing with the lid, so there is no world to pin strokes to. A light wash keeps
+// those marks readable, and like the shop's strokes the paint stays still.
+const CARD_BRUSH = { still: true, radius: 2, bleed: 5, bleedMix: 0.3, bloom: 0.35, edge: 0.5, lift: 0.04, grain: 0.35 };
 export const PAINT_LEVELS = LEVELS.length;
 const validLevel = (v) => Number.isInteger(v) && v >= 0 && v < LEVELS.length;
 function levelFromUrl() {
@@ -95,7 +103,24 @@ uniform vec2 paperOffset;
 uniform float seed;
 varying vec2 vUv;
 ${NOISE}
+#ifdef OWN_SURFACE
+// Brush mode: paint runs along a surface, never across an outline onto what is behind it. The depth
+// buffer is linear on screen for a flat surface, so a neighbour on the same one is predicted exactly.
+uniform sampler2D tDepth;
+uniform float near;
+uniform float far;
+float metres(float z) { z = z * 2.0 - 1.0; return (2.0 * near * far) / (far + near - z * (far - near)); }
+float rawDepth(vec2 uv) { return texture2D(tDepth, uv).x; }
+float nearer(float a, float b) { return abs(a) < abs(b) ? a : b; }
+#endif
 void main() {
+#ifdef OWN_SURFACE
+  float z0 = rawDepth(vUv);
+  vec2 slope = vec2(
+    nearer(rawDepth(vUv + vec2(texel.x, 0.0)) - z0, z0 - rawDepth(vUv - vec2(texel.x, 0.0))),
+    nearer(rawDepth(vUv + vec2(0.0, texel.y)) - z0, z0 - rawDepth(vUv - vec2(0.0, texel.y))));
+  float tol = 0.02 + 0.006 * metres(z0);
+#endif
   vec2 pq = gl_FragCoord.xy * FRAG / 512.0 + paperOffset;
   float ang = fbm(pq * 1.1) * 12.566 + (fbm(pq * 3.0 + seed * 0.02) - 0.5) * 0.6;
   vec2 dir = vec2(cos(ang), sin(ang));
@@ -113,6 +138,10 @@ void main() {
       vec3 c = texture2D(tWash, vUv + o).rgb;
       // dark into light: a darker neighbour gets more say
       float w = g * clamp(1.0 + 2.5 * (l0 - lum(c)), 0.25, 2.5);
+#ifdef OWN_SURFACE
+      float expected = z0 + dot(slope, o / texel);
+      w *= 1.0 - smoothstep(tol, tol * 1.6, abs(metres(rawDepth(vUv + o)) - metres(expected)));
+#endif
       acc += c * w; wsum += w;
     }
   }
@@ -133,13 +162,19 @@ uniform sampler2D tPaper;
 uniform vec2 resolution;
 uniform vec2 paperOffset;
 uniform float seed;
+uniform float borderSeed; // keeps boiling in brush mode, where seed stays 0
 uniform float near;
 uniform float far;
 uniform sampler2D tWash;   // the bled washes, only with WASH
 uniform float bloomAmt;
 uniform float edgeAmt;
 uniform float lift;       // how far every wash is thinned toward the paper
+uniform sampler2D tOver;  // brush mode: the suitcase overlay's own wash, inside overBox
+uniform float overlayOn;
+uniform vec4 overBox;
+uniform float grainAmt;
 varying vec2 vUv;
+float ovMask = 0.0;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
@@ -152,6 +187,18 @@ float fbm(vec2 p) { return noise(p) * 0.55 + noise(p * 2.1 + 7.3) * 0.3 + noise(
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 vec3 sceneAt(vec2 uv) { return toSRGB(clamp(texture2D(tScene, uv).rgb, 0.0, 1.0)); }
 float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+// Brush mode: the overlay has no strokes on it. Outside the box its wash was not rendered, so things
+// flying there (a record on its way to the case) show as drawn.
+vec3 washAt(vec2 uv) {
+  vec3 c = texture2D(tWash, uv).rgb;
+#ifdef STROKES
+  if (ovMask > 0.0) {
+    bool inBox = uv.x > overBox.x && uv.y > overBox.y && uv.x < overBox.z && uv.y < overBox.w;
+    c = mix(c, inBox ? texture2D(tOver, uv).rgb : sceneAt(uv), ovMask);
+  }
+#endif
+  return c;
+}
 float depthAt(vec2 uv) {
   float z = texture2D(tDepth, uv).x * 2.0 - 1.0;
   return (2.0 * near * far) / (far + near - z * (far - near));
@@ -169,19 +216,28 @@ void main() {
 #ifdef WASH
   // 2. the bled washes from the wash passes; depth jumps (silhouettes) add a broken drawn line
   // under the wash, the way a painter keeps the pencil sketch.
-  vec3 sharp = texture2D(tWash, uv).rgb;
+#ifdef STROKES
+  // the overlay cleared the depth buffer and drew itself, so its depth marks its pixels
+  if (overlayOn > 0.5) {
+    for (int i = 0; i < 4; i++) {
+      vec2 o = vec2(i < 2 ? (i == 0 ? -1.0 : 1.0) : 0.0, i < 2 ? 0.0 : (i == 2 ? -1.0 : 1.0));
+      ovMask += step(texture2D(tDepth, uv + o * px).x, 0.99999) * 0.25;
+    }
+  }
+#endif
+  vec3 sharp = washAt(uv);
   vec3 soft = sharp;
   float j = hash(gl_FragCoord.xy + seed) * 6.2831;
   for (int i = 0; i < 8; i++) {
     float a = j + float(i) * 0.7854;
-    soft += texture2D(tWash, uv + vec2(cos(a), sin(a)) * px * 3.0).rgb;
+    soft += washAt(uv + vec2(cos(a), sin(a)) * px * 3.0);
   }
   soft /= 9.0;
   vec3 col = mix(sharp, soft, 0.2);
 
   // 3. hard wash edges: where one wash meets another, pigment dries darker at the rim
-  float lx = lum(texture2D(tWash, uv + vec2(px.x * 2.0, 0.0)).rgb) - lum(texture2D(tWash, uv - vec2(px.x * 2.0, 0.0)).rgb);
-  float ly = lum(texture2D(tWash, uv + vec2(0.0, px.y * 2.0)).rgb) - lum(texture2D(tWash, uv - vec2(0.0, px.y * 2.0)).rgb);
+  float lx = lum(washAt(uv + vec2(px.x * 2.0, 0.0))) - lum(washAt(uv - vec2(px.x * 2.0, 0.0)));
+  float ly = lum(washAt(uv + vec2(0.0, px.y * 2.0))) - lum(washAt(uv - vec2(0.0, px.y * 2.0)));
   float cEdge = smoothstep(0.03, 0.16, length(vec2(lx, ly)));
   float d = depthAt(uv);
   float dx = depthAt(uv + vec2(px.x * 1.5, 0.0)) - depthAt(uv - vec2(px.x * 1.5, 0.0));
@@ -241,7 +297,7 @@ void main() {
   h = smoothstep(0.35, 0.95, h);
   float density = 1.0 - lum(col);
 #ifdef WASH
-  col *= 1.0 - (1.0 - h) * (0.18 + 0.55 * density);
+  col *= 1.0 - (1.0 - h) * (0.18 + 0.55 * density) * grainAmt;
 #else
   col *= 1.0 - (1.0 - h) * (0.12 + 0.4 * density);
 #endif
@@ -266,7 +322,7 @@ void main() {
 
   // 6. unpainted ragged border, like a painting that stops short of the sheet edge
   vec2 e = min(vUv, 1.0 - vUv) * vec2(aspect, 1.0);
-  float border = min(e.x, e.y) + (fbm(q * 9.0 + seed * 0.3) - 0.5) * 0.05;
+  float border = min(e.x, e.y) + (fbm(q * 9.0 + borderSeed * 0.3) - 0.5) * 0.05;
 #ifdef CARD
   border -= 0.05; // a wider paper margin: the sheet itself is the card
 #endif
@@ -302,7 +358,8 @@ export function renderOverlay(renderer, overlay) {
 export function createWatercolour(renderer, { card = false, level = levelFromUrl() } = {}) {
   const follow = level === null || level === undefined;
   if (follow) level = validLevel(settings.get('paint')) ? settings.get('paint') : LEVELS.length - 1;
-  let L = LEVELS[level];
+  const levelOf = (n) => (card && LEVELS[n]?.strokes ? CARD_BRUSH : LEVELS[n]);
+  let L = levelOf(level);
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
   const target = new THREE.WebGLRenderTarget(size.x, size.y, {
     type: THREE.HalfFloatType,
@@ -311,10 +368,13 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
     depthTexture: new THREE.DepthTexture(size.x, size.y),
   });
 
+  function finalDefines() {
+    return { ...(card ? { CARD: '' } : {}), ...(L ? { WASH: '' } : {}), ...(L?.strokes ? { STROKES: '' } : {}) };
+  }
   const material = new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
-    defines: { ...(card ? { CARD: '' } : {}), ...(L ? { WASH: '' } : {}) },
+    defines: finalDefines(),
     uniforms: {
       tScene: { value: target.texture },
       tDepth: { value: target.depthTexture },
@@ -322,12 +382,17 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
       resolution: { value: size.clone() },
       paperOffset: { value: new THREE.Vector2() },
       seed: { value: 0 },
+      borderSeed: { value: 0 },
       near: { value: 0.1 },
       far: { value: 100 },
       tWash: { value: null },
       bloomAmt: { value: 0 },
       edgeAmt: { value: 1 },
       lift: { value: 0.07 },
+      tOver: { value: null },
+      overlayOn: { value: 0 },
+      overBox: { value: new THREE.Vector4(2, 2, 2, 2) },
+      grainAmt: { value: 1 },
     },
     depthTest: false,
     depthWrite: false,
@@ -339,6 +404,7 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
   const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
   const dir = new THREE.Vector3();
+  const pan = new THREE.Vector2();
 
   // wash + bleed passes (level > 0), rebuilt when the level changes.
   // Two copies: `full`, and `lite` at half the size (a quarter of the pixels, half the radius: about
@@ -394,6 +460,54 @@ export function createWatercolour(renderer, { card = false, level = levelFromUrl
     renderer.setRenderTarget(prev);
     return w;
   }
+  // Brush mode: the world alone goes through here (the overlay is drawn after). Prep is mip-mapped: each
+  // stroke reads its colour from the level matching its size.
+  let brush = null;
+  // Every view strokes were placed from, kept so they can be placed again if the brush is rebuilt
+  // (a level change, a move to a screen with another pixel ratio).
+  const strokeViews = [];
+  let strokeWorld = null;
+  function makeBrush() {
+    const scale = washScale();
+    const ws = washSize(renderer.getDrawingBufferSize(new THREE.Vector2()), scale);
+    const refT = new THREE.WebGLRenderTarget(ws.x, ws.y, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, depthBuffer: false });
+    const paintT = new THREE.WebGLRenderTarget(ws.x, ws.y, { type: THREE.HalfFloatType, depthBuffer: false });
+    const bleedT = new THREE.WebGLRenderTarget(ws.x, ws.y, { type: THREE.HalfFloatType, depthBuffer: false });
+    const prepP = pass(prepShader, {}, { tScene: { value: target.texture } });
+    const strokes = createBrushStrokes(renderer, refT.texture, target.depthTexture);
+    const bleedP = pass(bleedShader, { OWN_SURFACE: '', BLEED: (L.bleed * scale).toFixed(2), BLEED_MIX: L.bleedMix.toFixed(2), FRAG: (1 / scale).toFixed(4) }, {
+      tWash: { value: paintT.texture }, texel: { value: new THREE.Vector2() },
+      paperOffset: material.uniforms.paperOffset, seed: material.uniforms.seed,
+      tDepth: { value: target.depthTexture }, near: material.uniforms.near, far: material.uniforms.far,
+    });
+    const steps = [[refT, prepP.sc, 'prep'], [paintT, strokes.scene, 'strokes'], [bleedT, bleedP.sc, 'bleed']];
+    const b = {
+      scale,
+      texture: bleedT.texture,
+      strokes,
+      render(pan, camera, sync) {
+        strokes.setPan(pan.x, pan.y);
+        strokes.setCamera(camera);
+        for (const [t, sc, name] of steps) { renderer.setRenderTarget(t); renderer.render(sc, postCam); sync?.(name); }
+      },
+      setSize(full) {
+        const s = washSize(full, scale);
+        for (const [t] of steps) t.setSize(s.x, s.y);
+        bleedP.m.uniforms.texel.value.set(1 / s.x, 1 / s.y);
+        strokes.setSize(s.x, s.y);
+      },
+      dispose() {
+        for (const [t] of steps) t.dispose();
+        for (const p of [prepP, bleedP]) { p.m.dispose(); p.sc.children[0].geometry.dispose(); }
+        strokes.dispose();
+      },
+    };
+    b.setSize(renderer.getDrawingBufferSize(new THREE.Vector2()));
+    const prev = renderer.getRenderTarget();
+    for (const [t, sc] of steps) { renderer.initRenderTarget(t); renderer.setRenderTarget(t); renderer.compile(sc, postCam); }
+    renderer.setRenderTarget(prev);
+    return b;
+  }
   // blends lite (k = 1) over full (k = 0) while the two hand over
   const mixT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
   const mixP = pass(/* glsl */ `
@@ -416,12 +530,20 @@ void main() {
     u.bloomAmt.value = L?.bloom ?? 0;
     u.edgeAmt.value = L?.edge ?? 1;
     u.lift.value = L?.lift ?? 0.07;
-    material.defines = { ...(card ? { CARD: '' } : {}), ...(L ? { WASH: '' } : {}) };
+    u.grainAmt.value = L?.grain ?? 1;
+    material.defines = finalDefines();
     material.needsUpdate = true;
-    wash?.dispose(); lite?.dispose();
-    wash = lite = null;
+    wash?.dispose(); lite?.dispose(); brush?.dispose();
+    wash = lite = brush = null;
     if (!L) return;
     wash = makeWash(1);
+    if (L.strokes) {
+      brush = makeBrush();
+      if (strokeViews.length) brush.strokes.bake(strokeWorld, strokeViews);
+      material.uniforms.tWash.value = brush.texture;
+      material.uniforms.tOver.value = wash.texture;
+      return;
+    }
     lite = makeWash(0.5);
     const s = washSize(renderer.getDrawingBufferSize(new THREE.Vector2()), wash.scale);
     mixT.setSize(s.x, s.y);
@@ -482,20 +604,31 @@ void main() {
   buildWash();
 
   function setLevel(n) {
-    if (!validLevel(n) || n === level) return;
+    if (!validLevel(n)) return;
+    if (n === level) return;
     level = n;
-    L = LEVELS[n];
+    L = levelOf(n);
     buildWash();
   }
   if (follow) settings.on('paint', setLevel);
 
+  function bakeStrokes(world, views) {
+    strokeWorld = world;
+    strokeViews.push(...views);
+    if (brush) brush.strokes.bake(world, views);
+  }
+
   return {
+    // Brush mode: views ([{ pos, target, fov }]) the camera will see, so strokes get placed there, now
+    // (not during a frame). In the other modes they are only kept, for when brush mode is switched on.
+    bakeStrokes,
     // overlay = { scene, camera }: drawn into the same target after the world, depth cleared, so it is
     // painted by the same pass but never hidden by (or clipped into) the walls.
     // sync (profiling only): called after each step with its name, to time it (see __cadenceDebug.profile)
     render(scene, camera, t, overlay, sync) {
       const u = material.uniforms;
-      u.seed.value = (Math.floor(t * BOIL_FPS) % 64) * 1.37;
+      u.borderSeed.value = (Math.floor(t * BOIL_FPS) % 64) * 1.37;
+      u.seed.value = brush || L?.still ? 0 : u.borderSeed.value; // dry paint does not boil, but the sheet's ragged border does
       u.near.value = camera.near;
       u.far.value = camera.far;
       // Pan the paper with the camera's turn so cursor tilt moves scene and sheet together
@@ -505,10 +638,36 @@ void main() {
       const pitch = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
       const fovY = THREE.MathUtils.degToRad(camera.fov);
       const pxPerRad = u.resolution.value.y / fovY;
-      u.paperOffset.value.set((-yaw * pxPerRad) / 512, (pitch * pxPerRad) / 512);
+      u.paperOffset.value.set((yaw * pxPerRad) / 512, (pitch * pxPerRad) / 512);
 
+      if (brush) {
+        // a page that named no views gets strokes for what it is looking at
+        if (!strokeViews.length) {
+          bakeStrokes(scene, [{ pos: camera.getWorldPosition(new THREE.Vector3()), target: camera.getWorldPosition(new THREE.Vector3()).add(dir), fov: Math.min(100, camera.fov * 1.2) }]);
+        }
+      }
       renderer.setRenderTarget(target);
       renderer.render(scene, camera);
+      if (brush) {
+        sync?.('scene');
+        pan.set((yaw * pxPerRad) / u.resolution.value.x, (pitch * pxPerRad) / u.resolution.value.y);
+        brush.render(pan, camera, sync);
+        renderer.setRenderTarget(target);
+        renderOverlay(renderer, overlay);
+        u.overlayOn.value = overlay ? 1 : 0;
+        const rect = overlay?.hiRect?.();
+        u.overBox.value.set(2, 2, 2, 2);
+        if (rect && rect.right > rect.left) {
+          scissorFull(rect);
+          wash.render(sync);
+          u.overBox.value.copy(mixP.m.uniforms.hi.value);
+          unscissor();
+        }
+        renderer.setRenderTarget(null);
+        renderer.render(post, postCam);
+        sync?.('final');
+        return;
+      }
       renderOverlay(renderer, overlay);
       sync?.('scene');
       renderWash(t, sync, overlay?.hiRect?.());
@@ -522,6 +681,7 @@ void main() {
       material.uniforms.resolution.value.copy(s);
       // a new pixel ratio (window moved to another screen) changes the wash scale: rebuild
       if (wash && wash.scale !== washScale()) buildWash();
+      else if (brush) { wash.setSize(s); brush.setSize(s); }
       else if (wash) {
         wash.setSize(s); lite.setSize(s);
         const m = washSize(s, wash.scale);

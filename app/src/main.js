@@ -9,7 +9,7 @@ import { createRack } from './racks/index.js';
 import { getCover, setCoverUploader } from './racks/common.js';
 import { warmUp } from './warmup.js';
 import { STATIONS, HOME, assignShelves } from './stations.js';
-import { createNav, AT_HOME } from './nav.js';
+import { createNav, AT_HOME, paintViews } from './nav.js';
 import { createMenu } from './menu.js';
 import { createSearch } from './search.js';
 import { createSettingsPanel } from './settings-panel.js';
@@ -209,6 +209,8 @@ function buildRack(i, shelf) {
     shadowsBusy(2); // the records drop in
     if (i === nav.at) warm();
     if (furniture[STATIONS[i].id]) furniture[STATIONS[i].id].visible = false;
+    // the new rack's frame gets its own strokes
+    painter?.bakeStrokes(scene, [{ pos: STATIONS[i].cam.pos, target: STATIONS[i].cam.target }]);
   };
   if (shotMode || rack.root.visible) { reveal(); return; } // a refill of a rack on show swaps in place
   rack.root.visible = false;
@@ -636,6 +638,9 @@ document.addEventListener('pointerleave', () => pacer?.kick());
 for (const k of ['paint', 'covers', 'fps', 'maxFps']) settings.on(k, () => pacer?.kick());
 
 // Deterministic time for screenshots: ?shot, then window.__seek(seconds).
+// brush strokes get placed from every spot the camera visits (nothing in the old looks pays for this)
+painter?.bakeStrokes(scene, paintViews(HOME, STATIONS));
+
 if (shotMode) {
   // let shelves, covers and fonts arrive, then settle all animation (big dt) before the frame is captured
   const waitFor = async (cond, ms) => { const t0 = performance.now(); while (!cond() && performance.now() - t0 < ms) await new Promise((r) => setTimeout(r, 50)); };
@@ -688,7 +693,7 @@ if (shotMode) {
       renderer,
       step: (now) => { tickFps(); frame((now - start) / 1000); watchCamera(); },
       busy: () => nav.intro || !nav.settled || suitcase.flying || suitcase.machine.active || suitcase.over || suitcase.suitcase.lidMoving,
-      // a spinning record on screen wants a smooth turn; otherwise only boiling edges and lanterns move
+      // a spinning record on screen wants a smooth turn; otherwise only lanterns and the boil move (Brush strokes: only the ragged border boils; the older looks: all of it)
       idleFps: () => (player?.playerState === 1 && suitcase.tucked < 0.5 ? 30 : 12),
     });
     pacer.start();

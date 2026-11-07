@@ -1,78 +1,109 @@
 # Cadence
 
-A lightweight macOS menu-bar app that sits in front of [Kaset](https://github.com/sozercan/kaset)
-(a native YouTube Music client). Press a shortcut and a 3D leather suitcase appears at your
-cursor and flips its lid open on a record player.
+A free, open-source YouTube Music app where your music lives in a hand-painted 3D record shop.
 
-- **⌃⌥Space** (default, will be configurable) opens the suitcase at the cursor, anywhere. The lid
-  is flicked open with a physical hinge (the same model as Lodestar's compass lid) and lands with a
-  little bounce.
-- **Record**: the middle of the record shows the song's artwork. The tonearm creeps inward as
-  the song plays.
-- **Buttons** beside the record: back, play / pause, skip, like. `Space` also plays / pauses, `←` / `→`
-  go back / skip, `L` likes.
-- **Volume**: scroll up / down (trackpad or wheel) over the suitcase, or drag the knob around, or
-  `↑` / `↓`. The knob turns with the volume.
-- **Scrub** by dragging the record clockwise (forward) or anticlockwise (back). One full turn is
-  20 seconds. **Off for now**: Kaset has no seek command (see below).
-- **Esc**, clicking outside, or the shortcut again shuts the lid and closes it.
-- Menu bar only: no Dock icon.
+You walk down a Tuscan alley and into the shop, where your YouTube Music shelves are racks of
+records. Pick one up and its vinyl flies out of the sleeve and lands on a little suitcase record
+player. The sky outside follows your real clock, and the lanterns come on one by one at dusk.
 
-Cadence is a **companion**: Kaset stays the player and Cadence is the quick remote.
+Cadence is an unofficial app, not affiliated with YouTube or Google. It relies on YouTube Music's
+web page and internal API, so a change on their side can break it.
 
-## How it talks to Kaset
+## What it does
 
-| Need | Mechanism |
+- **The shop.** Eight sections, each with its own kind of rack, from a crate table in the hall to a
+  spinner rack in the plant room and a market stall in the courtyard. Your shelves ("Quick picks",
+  "Listen again"...) are brush-stroke words down the sides of the screen; click one and the camera
+  walks there.
+- **Records.** Hover a record and it comes out toward you with a paper name tag. Click it to play.
+- **The suitcase player.** A record player in a leather case, bottom left. The record spins with the
+  cover on its label and the tonearm creeps in as the song plays. Turn the knob for volume, or drag
+  the record to scrub. By default the song starts when the needle lands.
+- **Mini player.** Press **⌃⌥Space** anywhere to open the suitcase at your cursor, without opening
+  the shop.
+- **Search.** Press **⌥⌘S** to find a song. It has no sleeve, so a small record machine pops up and
+  spits the disc onto the platter.
+- **A painted look.** The world is repainted with brush strokes pinned to its surfaces, and album
+  covers are painted to match. Settings can switch to a softer watercolour wash or turn cover
+  painting off.
+- **Runs cool.** It only draws at full speed while something is moving, slows down when idle, and
+  stops drawing while its window is hidden.
+
+## Controls
+
+| Key | Action |
 | --- | --- |
-| Play, pause, next, previous, like, volume, now playing | Kaset's AppleScript (`playpause`, `next track`, `like track`, `set volume N`, `get player info`) |
-| Start a song or a list of songs | AppleScript `play video` / `play videos` with YouTube Music video IDs |
-| Open a playlist or album | A shortcut from the Shortcuts app, run with `shortcuts run` (Kaset documents Play Playlist / Play Album actions) |
+| `⌃⌥Space` | Open or close the mini player, from any app |
+| `⌥⌘S` (`Ctrl+Alt+S` on Windows/Linux) | Search |
+| `Space` | Play / pause |
+| `←` `→` | Back / skip |
+| `↑` `↓` or scroll | Volume |
+| `L` | Like |
+| `Tab` / `Shift+Tab` | Next / previous section |
+| `Esc` | Back to the home spot, or close the mini player |
+| `⌘,` (`Ctrl+,` on Windows/Linux) | Settings |
 
-Kaset cannot list your library, so Cadence does not browse music: you start something in Kaset
-and Cadence controls it. (`PinnedItem` / `pins.json` from the first prototype are still in
-`CadenceCore` but the suitcase does not use them.)
+Click or press any key to skip the intro.
 
-**No seek.** Kaset's AppleScript has no way to change the playback position, so scrubbing with the
-record is built (`RecordScrub`) but switched off: `MusicBackend.canSeek` is false for Kaset. When Kaset
-gains a seek command, add it to `KasetScripts` and return true from `KasetBackend.canSeek`.
+On macOS the volume controls set the Mac's own output volume. Elsewhere they set the player's volume.
 
-**Like** sends `like track`. Kaset's docs do not say whether that toggles, so the heart may only
-ever turn on.
+## Run it
 
-macOS asks once for permission to control Kaset (Automation).
-
-## Status
-
-| Piece | State |
-| --- | --- |
-| `CadenceCore`: lid hinge, volume knob, record scrub, tonearm geometry, suitcase layout, Kaset AppleScript + now-playing parsing | done, unit tested (`swift test`, runs on Linux too) |
-| `Cadence` app: SceneKit suitcase, input, animation, menu bar, global hotkey | written, **needs a first compile and tuning on a Mac** |
-| Verified against a real Kaset (volume, like, artwork) | **not yet** |
-| Scrubbing | built, off until Kaset can seek |
-| Settings UI, onboarding, icon, hotkey picker | not started |
-
-## Build
+There are no packaged releases yet, so Cadence runs from source. You need Node.js 22.12 or newer.
 
 ```sh
-swift test                  # core logic, any platform
-./scripts/build.sh          # macOS only: builds build/Cadence.app
-./scripts/build.sh --run    # build and launch
+cd app
+npm install
+npm run dev
 ```
 
-Requires macOS 14+.
+The first time, use the sign-in button to log in to your Google account. Without signing in, it
+works as a guest, with ads and generic shelves.
 
-## Layout
+On Linux, start it with `npm run dev -- --no-sandbox`.
+
+macOS is the main target. Automated tests also run on Linux. Windows is untested.
+
+## How it works
+
+Cadence is an Electron app with a Three.js scene. All the scenery is built in code.
+
+A hidden `music.youtube.com` window does the actual playing, so YouTube Music itself handles the
+queue, radio, ads, history and likes. Cadence drives that page with a small injected script and
+reads your shelves and search results from the same internal API the page uses.
 
 ```
-Sources/CadenceCore/   pure Swift, no AppKit: hinge, knob, scrub, layout, Kaset
-Sources/Cadence/       AppKit + SceneKit app
-  SuitcaseScene.swift     builds the 3D case and exposes setters
-  SuitcaseView.swift      animation loop and all input
-  SuitcaseTextures.swift  every texture, drawn in code
-Tests/CadenceCoreTests/
-scripts/build.sh
+app/                 the app
+  electron/          main process, hidden YouTube Music window, mini window
+  src/               the shop, racks, suitcase, painting, search, settings
+  scripts/           dev launcher, screenshot tool, end-to-end and behaviour checks
+  test/              unit tests
+Sources/, Tests/,    the first prototype: a macOS suitcase remote for Kaset, written in Swift.
+  Package.swift,     Shelved and not part of the app.
+  scripts/build.sh
 ```
+
+[`app/README.md`](app/README.md) has the details: each feature and its source file, URL options for
+pinning the camera or time of day, and the dev pages.
+
+## Develop
+
+Run these from `app/`:
+
+```sh
+npm test                                   # unit tests: parser and suitcase
+npm run web                                # the shop in a browser, with a fake record store
+npm run build && npm run electron          # run the production build
+npm run build && xvfb-run -a npm run e2e -- out_dir   # real app against YouTube Music (Linux)
+```
+
+## Not done yet
+
+- Packaged downloads
+- Playlists and albums opening as their own rack (clicking one plays all of it for now)
+- Media keys
+- A configurable mini player shortcut
 
 ## License
 
-MIT
+[MIT](LICENSE)

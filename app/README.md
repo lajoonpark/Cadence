@@ -4,7 +4,7 @@ A 3D vinyl shop for YouTube Music (free, open source). Electron + Three.js.
 
 The opening shot: a narrow Tuscan alley of brick and stucco houses, an arch over the street, a little piazza, and the Cadence shop. The door swings open on its own, the camera walks into the shop, and the view tilts with the cursor. All scenery is procedural.
 
-**Look:** watercolour, through a screen pass (`src/watercolour.js`): hand wobble that shifts 8 times a second, colour bleed, wet edges, paper grain and a ragged paper border. `?style=flat` shows the old flat toon look.
+**Look:** painted, through a screen pass (`src/watercolour.js`): brush strokes pinned to the world's surfaces by default (`src/brushstrokes.js`), or a watercolour wash with hand wobble, colour bleed, wet edges and paper grain (Settings > Painting). Both have a ragged paper border. `?style=flat` shows the old flat toon look.
 
 **Everything is real geometry**, with no brick textures. `src/kit.js` collects thousands of bricks, flagstones, roof tiles and shutter slats into a few instanced meshes. `src/masonry.js` lays brick walls course by course around openings, builds arches with voussoirs, barrel vaults, stucco with patches of exposed brick, and paving. `src/details.js` has windows, louvred shutters, doors, balconies, lanterns, eaves and pots. `src/props.js` has street life, and `src/interior.js` has shop furniture.
 
@@ -50,8 +50,9 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
   toward you with a paper name tag; click it and its vinyl pops out and flies into the suitcase.
   On the crate table (Quick picks) the record under the cursor comes up with a neighbour each side,
   fanned like a hand of cards, so each is a big target. At any rack, resting the cursor on a record
-  turns the camera about halfway toward it (`updateFocus` in `main.js`), and a record that is held up
-  takes the click wherever it has moved to, so you click the song, not the rack behind it.
+  turns the camera part of the way toward it (`updateFocus` in `main.js`). Records are picked by where
+  they rest, so a lifted record never blocks its neighbours; if the cursor is on none of those, the
+  lifted record takes the click, so you click the song, not the rack behind it.
   At the courtyard stall, hovering a crate makes all its records float up in front of you, spread
   out so every cover shows; the one under the cursor grows and comes forward with its tag.
 - **The suitcase** (`src/suitcase/`): the player, bottom left. A watercolour leather case with a
@@ -72,8 +73,10 @@ shop talks to it only through `window.cadence` (`electron/preload.cjs`).
   (`src/settings-panel.js`, stored by `src/settings.js` in localStorage, shared with the mini window).
   *Painting* sets the look: Faint / Light / Medium / Heavy watercolour, or Brush strokes (default), which repaints the world with strokes pinned to its surfaces: a full coat pulled in one direction, each stroke kept to its own surface, so the paint looks laid on by one hand, moves with the world and stays still when the camera does, while only the ragged border keeps boiling (`src/brushstrokes.js`; check with `scripts/still-check.mjs`). Faint is the
   old single pass; the others flatten shading into washes and let colour bleed (`LEVELS` in
-  `src/watercolour.js`). `?wc=0..3` (or `CADENCE_QUERY="wc=2" npm run dev`) pins a level for screenshots.
-  *Smoothness* caps the frame rate at 60 or 30 fps.
+  `src/watercolour.js`). `?wc=0..4` (or `CADENCE_QUERY="wc=2" npm run dev`) pins a level for screenshots.
+  *Cover art* sets how strongly covers are painted (Off to Heavy, default Heavy). *Start of a song* plays
+  when the arm lands (default) or at once. *Smoothness* caps the frame rate at 60 or 30 fps. *Frame rate*
+  shows an fps readout.
 - **Heat / battery**: the shop is drawn at that cap only while something moves (camera, input, flights,
   lid); once still it drops to 12 fps (30 while a record spins on screen), and stops while the window is
   hidden, minimised or covered (`src/pacer.js`; `node scripts/idle-check.mjs [rack]` checks it). The
